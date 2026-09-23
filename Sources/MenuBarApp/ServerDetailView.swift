@@ -164,12 +164,13 @@ struct ServerDetailView: View {
                     }
                 }
             }
-            HStack(alignment: .top, spacing: 12) {
+            // Stacked rather than side by side: three cards in a row leave each too
+            // narrow for its buttons, which then push the whole sheet wider than it is.
+            VStack(spacing: 10) {
                 AgentCard(standing: claudeStanding(server))
                 AgentCard(standing: codexStanding(server))
                 AgentCard(standing: copilotStanding(server))
             }
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -501,8 +502,7 @@ private struct AgentStanding {
     let command: () -> String?
 }
 
-// One agent the server can be registered with. The two cards share a row, so each keeps
-// to a compact pill-and-link layout instead of a full-width toolbar.
+// One agent the server can be registered with.
 private struct AgentCard: View {
     let standing: AgentStanding
 
@@ -550,25 +550,37 @@ private struct AgentCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Circle().fill(dot).frame(width: 8, height: 8)
-                Text(standing.title).font(.system(size: 14, weight: .semibold))
-                Spacer(minLength: 8)
-                if standing.busy { ProgressView().controlSize(.small) }
-                Text(stateText)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(stateTint)
-            }
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Circle().fill(dot).frame(width: 8, height: 8)
+                    Text(standing.title).font(.system(size: 14, weight: .semibold))
+                    Text(stateText)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(stateTint)
+                    if standing.busy { ProgressView().controlSize(.small) }
+                }
 
-            Text(caption)
-                .font(.system(size: 12.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ForEach(notes) { note in
+                    Text(note.text)
+                        .font(note.mono ? .mono(11) : .system(size: 11.5))
+                        .foregroundStyle(note.tint ?? Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if tone != .unsupported {
                 HStack(spacing: 10) {
+                    if let command = standing.command() {
+                        CopyButton("Copy", size: 12.5) { command }
+                            .appTooltip("Copy the \(standing.title) command for this server")
+                    }
                     if tone == .outOfSync {
                         ActionButton(title: "Update", tone: .attention, height: 28, size: 12,
                                      action: standing.update)
@@ -576,27 +588,14 @@ private struct AgentCard: View {
                     ActionButton(title: standing.registered ? "Remove" : "Add",
                                  tone: standing.registered ? .danger : .green,
                                  height: 28, size: 12, action: standing.toggle)
-                    // Two cards share the row, so the label stays short and the tooltip
-                    // carries the detail.
-                    if let command = standing.command() {
-                        CopyButton("Copy", size: 12.5) { command }
-                            .appTooltip("Copy the \(standing.title) command for this server")
-                    }
-                    Spacer(minLength: 0)
                 }
+                .fixedSize()
                 .disabled(!enabled)
                 .opacity(enabled ? 1 : 0.4)
             }
-
-            ForEach(notes) { note in
-                Text(note.text)
-                    .font(note.mono ? .mono(11) : .system(size: 11.5))
-                    .foregroundStyle(note.tint ?? Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
         .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface(cornerRadius: 12)
     }
 
