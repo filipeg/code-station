@@ -557,6 +557,7 @@ struct DesignSessionTests {
         // Nothing else steers the look, so the aesthetic guidance travels with every
         // design turn rather than waiting on a skill the user may not have installed.
         #expect(prompt.contains("Generated design clusters around a few looks"))
+        #expect(prompt.contains("image generation tool"))
 
         let claude = SessionRunner.arguments(
             agent: .claudeCode,

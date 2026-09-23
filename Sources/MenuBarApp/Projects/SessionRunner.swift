@@ -1395,6 +1395,16 @@ final class SessionRunner {
         directory. Build the actual visible design, not a Markdown design brief or a prose \
         description of one. Make useful interactions work in the canvas.
 
+        When the result is mainly artwork, such as a comic, illustration, poster, mascot, \
+        or photo-like scene, and you have an image generation tool, draw the artwork with \
+        that tool instead of building it from CSS or SVG shapes. Save it as a PNG in an \
+        `assets` folder in the artifact directory, and place it in the HTML page with \
+        useful alt text. Keep the page itself in HTML, so titles, controls, and any text \
+        the user may want to edit stay real text. Save the exact image prompt next to the \
+        image so a later revision can build on it. Do not use generated images for \
+        product screens or interface parts, because they have to stay real HTML to be \
+        built from.
+
         When the design contains more than one screen, create one standalone HTML file per \
         screen and write `design.json` in the artifact directory with this shape:
         {"screens":[{"id":"home","title":"Home","path":"index.html","width":1440,"height":900}]}
