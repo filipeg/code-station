@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let orphanedWorktrees = OrphanedWorktreeMonitor()
     private let gitStats = GitStatsCache()
     private let terminals = TerminalStore()
+    private let explorerMemory = ExplorerMemory()
     private let loginItem = LoginItem()
     // Reached from the main menu as well as the window, so the text size items can
     // change the same setting the Settings sheet shows.
@@ -145,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .environment(orphanedWorktrees)
                     .environment(gitStats)
                     .environment(terminals)
+                    .environment(explorerMemory)
                     .environment(loginItem)
                     .environment(appSettings)
                     .environment(mobileAccess)

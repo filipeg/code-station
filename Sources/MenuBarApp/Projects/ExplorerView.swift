@@ -22,6 +22,7 @@ struct ExplorerView: View {
     let root: String
 
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(ExplorerMemory.self) private var memory
 
     // Children are kept per folder rather than as a nested tree, so a folder can be read
     // the moment it is opened and the rows on screen stay a flat list.
@@ -38,6 +39,9 @@ struct ExplorerView: View {
     @State private var treeWidth = ExplorerSplitLayout.defaultTreeWidth
     @State private var dragStartTreeWidth: CGFloat?
     @FocusState private var treeFocused: Bool
+    // The folder the pane holds now. It trails `root` for a moment when the session
+    // changes, which is what lets the old folder be remembered before the new one opens.
+    @State private var openedRoot: String?
 
     // The text as loaded sits next to the draft, so "anything to save" and "anything to
     // lose" are both one comparison.
@@ -105,7 +109,10 @@ struct ExplorerView: View {
                 }
             }
         }
-        .onDisappear { findMonitors.forEach { $0.stop() } }
+        .onDisappear {
+            findMonitors.forEach { $0.stop() }
+            rememberPlace()
+        }
         .onChange(of: findQuery) {
             findSelection = 0
             refreshFind()
@@ -664,6 +671,9 @@ struct ExplorerView: View {
     // The pane is reused as the session changes, so everything the last folder left behind
     // has to go before the new one is read.
     private func openRoot() async {
+        rememberPlace()
+        openedRoot = root
+        let place = memory.place(for: root) ?? ExplorerMemory.Place()
         children = [:]
         expanded = []
         selected = nil
@@ -675,7 +685,52 @@ struct ExplorerView: View {
         original = ""
         loadedAt = nil
         resetFind()
+        showHidden = place.showHidden
+        treeWidth = place.treeWidth
         await load(root)
+        await restore(place)
+    }
+
+    private func rememberPlace() {
+        guard let openedRoot else { return }
+        var unsaved: ExplorerMemory.UnsavedEdit?
+        if dirty, let selected, let preview {
+            unsaved = .init(path: selected.path, preview: preview, draft: draft,
+                            original: original, loadedAt: loadedAt)
+        }
+        memory.remember(.init(expanded: expanded,
+                              selected: selected,
+                              showHidden: showHidden,
+                              treeWidth: treeWidth,
+                              renderingMarkdown: renderingMarkdown,
+                              unsaved: unsaved),
+                        for: openedRoot)
+    }
+
+    // Folders and files may have gone while the pane was away, so only what is still on
+    // disk is opened again. Parents are read before their children.
+    private func restore(_ place: ExplorerMemory.Place) async {
+        let fileManager = FileManager.default
+        for path in place.expanded.sorted(by: { $0.count < $1.count })
+        where fileManager.fileExists(atPath: path) {
+            guard !Task.isCancelled else { return }
+            expanded.insert(path)
+            await load(path)
+        }
+        guard !Task.isCancelled, let node = place.selected,
+              fileManager.fileExists(atPath: node.path) else { return }
+
+        if let edit = place.unsaved, edit.path == node.path {
+            selected = node
+            preview = edit.preview
+            draft = edit.draft
+            original = edit.original
+            loadedAt = edit.loadedAt
+            language = CodeLanguage(fileExtension: node.kind)
+        } else {
+            select(node)
+        }
+        renderingMarkdown = place.renderingMarkdown && node.supportsMarkdownPreview
     }
 
     private func load(_ path: String) async {
