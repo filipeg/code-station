@@ -151,7 +151,8 @@ struct DesignWebContent: NSViewRepresentable {
             forName: Coordinator.messageName)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler,
+                             WKDownloadDelegate {
         static let messageName = "codeStationDesignSelection"
 
         var loadedKey: String?
@@ -240,6 +241,12 @@ struct DesignWebContent: NSViewRepresentable {
                         (WKNavigationActionPolicy) -> Void) {
             let scheme = navigationAction.request.url?.scheme?.lowercased()
             let allowed = ["file", "about", "data", "blob"].contains(scheme ?? "")
+            // A web view drops a link's `download` attribute unless the app takes the
+            // file itself, so a design's download button would do nothing.
+            if allowed, navigationAction.shouldPerformDownload {
+                decisionHandler(.download)
+                return
+            }
             let destination = navigationAction.request.url
             let sameDocument = destination?.fragment != nil
                 && destination?.path == webView.url?.path
@@ -260,6 +267,26 @@ struct DesignWebContent: NSViewRepresentable {
                 displayedURL = url
             }
             decisionHandler(allowed ? .allow : .cancel)
+        }
+
+        func webView(_ webView: WKWebView, navigationAction: WKNavigationAction,
+                     didBecome download: WKDownload) {
+            download.delegate = self
+        }
+
+        func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
+                      suggestedFilename: String,
+                      completionHandler: @escaping @MainActor @Sendable (URL?) -> Void) {
+            guard let destination = FilePicker.saveFile(
+                suggestedName: suggestedFilename, prompt: "Save",
+                message: "Choose where to save the file from this design.") else {
+                completionHandler(nil)
+                return
+            }
+            // The save panel has already asked before replacing a file, and a download
+            // fails when its destination exists.
+            try? FileManager.default.removeItem(at: destination)
+            completionHandler(destination)
         }
     }
 
