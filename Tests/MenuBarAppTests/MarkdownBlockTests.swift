@@ -438,6 +438,73 @@ struct MarkdownBlockTests {
             #expect(pair.0.maxY <= pair.1.minY)
         }
     }
+    @Test @MainActor func linkCellsStayClickableAfterBeingMeasuredAtAnotherWidth() throws {
+        let repos = ["teya-interview-assistant#250", "teya-laime-helper#1567",
+                     "teya-laime-helper#1570", "ab-testing-frontend#77"]
+        let table = MarkdownTable(
+            header: ["#", "PR", "Title", "CI", "dependencies", "copycat",
+                     "Up to date with main", "Principals review pending"],
+            alignments: Array(repeating: .leading, count: 8),
+            rows: repos.enumerated().map { index, repo in
+                ["\(index + 1)", "[\(repo)](https://example.com/\(index))",
+                 "Bump nimbus-jose-jwt 10.9.1 → 10.10", "✅", "✅", "-", "✅", "✅"]
+            })
+        let view = MeasuresNarrowerFirst {
+            MarkdownBlockView(block: MarkdownBlock(id: 0, kind: .table(table)),
+                              projectPath: "/tmp",
+                              textScale: 1)
+        }
+        .environment(TooltipPresenter())
+        let host = NSHostingView(rootView: view)
+        host.sizingOptions = []
+        host.frame = CGRect(x: 0, y: 0, width: 875, height: 400)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        window.setFrameOrigin(CGPoint(x: -10_000, y: -10_000))
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        host.layoutSubtreeIfNeeded()
+
+        let linked = host.descendants
+            .compactMap { $0 as? NSTextView }
+            .filter { $0.textStorage.map(hasLink) ?? false }
+        try #require(linked.count == repos.count)
+        for textView in linked {
+            let layoutManager = try #require(textView.layoutManager)
+            let container = try #require(textView.textContainer)
+            layoutManager.ensureLayout(for: container)
+            let glyphs = layoutManager.glyphRange(for: container)
+            let lastGlyph = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphs.upperBound - 1, length: 1),
+                in: container)
+            let point = textView.convert(CGPoint(x: lastGlyph.midX, y: lastGlyph.midY), to: nil)
+            #expect(window.contentView?.hitTest(point) === textView,
+                    "\(textView.string)")
+        }
+    }
+}
+
+// Asks its content how tall it would be at a narrower width before placing it at the
+// full one, the way a stack or scroller weighs its children before laying them out.
+private struct MeasuresNarrowerFirst: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let width = proposal.width ?? 600
+        _ = subview.sizeThatFits(ProposedViewSize(width: width * 0.7, height: nil))
+        return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,
+                       subviews: Subviews, cache: inout ()) {
+        guard let subview = subviews.first else { return }
+        _ = subview.sizeThatFits(ProposedViewSize(width: bounds.width * 0.7, height: nil))
+        subview.place(at: bounds.origin, anchor: .topLeading,
+                      proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
 }
 
 private extension NSView {

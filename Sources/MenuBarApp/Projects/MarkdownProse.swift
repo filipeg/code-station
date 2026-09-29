@@ -1067,8 +1067,11 @@ private struct LinkAwareText: NSViewRepresentable {
         view.textContainer?.lineFragmentPadding = 0
         view.textContainer?.widthTracksTextView = width != .fixed
         view.textContainer?.heightTracksTextView = false
-        view.isHorizontallyResizable = width == .fixed
-        view.isVerticallyResizable = true
+        // SwiftUI owns the frame. A text view that sized itself would grow or shrink
+        // every time it is measured at a width it is never placed at, and then its frame
+        // no longer matches where SwiftUI thinks it is, so clicks miss it.
+        view.isHorizontallyResizable = false
+        view.isVerticallyResizable = false
         view.reflows = width != .fixed
         if width == .fixed {
             view.textContainer?.containerSize = CGSize(width: CGFloat.greatestFiniteMagnitude,
