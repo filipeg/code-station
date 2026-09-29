@@ -583,8 +583,7 @@ struct SessionView: View {
             // says which of them the menu names first.
             HeaderRailButton(icon: "terminal",
                              state: terminalOpen ? .open : .rest,
-                             label: "Open a shell",
-                             hint: "Here or in \(SystemTerminal.appName)")
+                             label: "Open a shell here or in \(SystemTerminal.appName)")
                 .appMenu {
                     terminalEntries(isOpen: terminalOpen,
                                     toggle: { toggleTerminal(directory: directory) },
