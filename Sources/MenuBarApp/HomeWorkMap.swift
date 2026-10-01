@@ -1,0 +1,327 @@
+import SwiftUI
+
+struct HomeLive: Identifiable {
+    let session: ChatSession
+    let containerName: String
+    let tint: Theme.ProjectTint
+    let avatar: SidebarAvatar
+    let tone: SessionTone
+    let activity: String
+    let location: String
+    let destination: SessionDestination
+    let permission: PermissionRequest?
+    var finished = false
+
+    var id: UUID { session.id }
+    var containerID: UUID { session.workspaceID ?? session.projectID }
+    var needsAttention: Bool { tone == .needsYou }
+
+    var status: String {
+        if let permission { return permission.isQuestion ? "Answer needed" : "Permission needed" }
+        if finished { return "Ready to review" }
+        switch tone {
+        case .running: return destination == .design ? "Designing" : "Working"
+        case .waiting: return "Waiting on a task"
+        case .needsYou: return "Needs your attention"
+        case .idle: return session.hasStarted ? "Ready to resume" : "Not started"
+        }
+    }
+
+    func primaryAction(hasChanges: Bool) -> (title: String, destination: SessionDestination) {
+        if permission != nil { return ("View request", destination) }
+        if destination == .design { return ("Open Design", .design) }
+        if finished {
+            return hasChanges ? ("Review changes", .changes) : ("Review result", destination)
+        }
+        return (tone == .idle ? "Resume session" : "Open session", destination)
+    }
+}
+
+struct HomeWorkMap {
+    struct Group: Identifiable {
+        let id: UUID
+        let sessions: [HomeLive]
+        var identity: HomeLive { sessions[0] }
+    }
+
+    let sessions: [HomeLive]
+
+    var active: [HomeLive] { sessions.filter { $0.tone != .idle } }
+    var waiting: [HomeLive] { active.filter(\.needsAttention) }
+    var runningCount: Int { active.count { $0.tone == .running } }
+
+    var containerSummary: String {
+        let workspaces = groups.count { $0.identity.session.workspaceID != nil }
+        let projects = groups.count - workspaces
+        var parts: [String] = []
+        if projects > 0 { parts.append(counted(projects, "project")) }
+        if workspaces > 0 { parts.append(counted(workspaces, "workspace")) }
+        return parts.joined(separator: " · ")
+    }
+
+    var groups: [Group] {
+        let grouped = Dictionary(grouping: active, by: \.containerID)
+        return grouped.map { Group(id: $0.key, sessions: $0.value.sorted(by: Self.comesFirst)) }
+            .sorted {
+                let order = $0.identity.containerName.localizedStandardCompare($1.identity.containerName)
+                return order == .orderedSame
+                    ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
+            }
+    }
+
+    func selection(_ id: UUID?, needsYouOnly: Bool) -> HomeLive? {
+        if let selected = sessions.first(where: { $0.id == id }),
+           !needsYouOnly || selected.needsAttention { return selected }
+        if let waiting = waiting.sorted(by: Self.comesFirst).first { return waiting }
+        guard !needsYouOnly else { return nil }
+        return active.sorted(by: Self.comesFirst).first
+            ?? sessions.sorted(by: Self.comesFirst).first
+    }
+
+    private static func comesFirst(_ first: HomeLive, _ second: HomeLive) -> Bool {
+        if (first.permission != nil) != (second.permission != nil) { return first.permission != nil }
+        if first.needsAttention != second.needsAttention { return first.needsAttention }
+        if first.session.lastActivity != second.session.lastActivity {
+            return first.session.lastActivity > second.session.lastActivity
+        }
+        return first.id.uuidString < second.id.uuidString
+    }
+}
+
+struct HomeWorkMapView: View {
+    let map: HomeWorkMap
+    let selectedID: UUID?
+    @Binding var needsYouOnly: Bool
+    let compact: Bool
+    let select: (UUID) -> Void
+
+    private var spatial: Bool {
+        !compact && !map.groups.isEmpty && map.groups.count <= 4
+            && map.groups.allSatisfy { $0.sessions.count <= 4 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            ViewThatFits(in: .horizontal) {
+                HStack { heading; Spacer(minLength: 12); filters }
+                VStack(alignment: .leading, spacing: 12) { heading; filters }
+            }
+            if map.active.isEmpty {
+                PaneMessage(icon: "circle.grid.cross", title: "Room for your next idea",
+                            detail: "No sessions are active. Start something new or pick up a recent conversation.")
+                    .frame(minHeight: 280)
+            } else if spatial {
+                spatialMap
+            } else {
+                HStack(spacing: 8) {
+                    Text("\(map.runningCount)").font(.serif(28))
+                    Text("sessions working").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(map.groups) { group in groupCard(group) }
+                    }
+                    .padding(3)
+                }
+                .frame(height: 320)
+            }
+            if needsYouOnly && map.waiting.isEmpty {
+                Text("You're all caught up. Nothing needs your attention.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack { legend; Spacer(); caption }
+                VStack(alignment: .leading, spacing: 8) { legend; caption }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            Canvas { context, size in
+                for x in stride(from: 0.0, to: size.width, by: 16) {
+                    for y in stride(from: 0.0, to: size.height, by: 16) {
+                        context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)),
+                                     with: .color(Theme.border))
+                    }
+                }
+            }
+            .accessibilityHidden(true)
+        }
+        .cardSurface(cornerRadius: 16)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Work map")
+    }
+
+    private var heading: some View {
+        Label("Your work map", systemImage: "square.grid.2x2")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+    }
+
+    private var filters: some View {
+        HStack(spacing: 4) {
+            ChoicePill(title: "All active \(map.active.count)", selected: !needsYouOnly) {
+                needsYouOnly = false
+            }
+            .accessibilityAddTraits(!needsYouOnly ? .isSelected : [])
+            ChoicePill(title: "Needs you \(map.waiting.count)", selected: needsYouOnly) {
+                needsYouOnly = true
+            }
+            .accessibilityAddTraits(needsYouOnly ? .isSelected : [])
+        }
+    }
+
+    private var spatialMap: some View {
+        let groups = map.groups
+        let left = Array(groups.prefix(groups.count == 4 ? 2 : 1))
+        let right = Array(groups.dropFirst(left.count))
+        return HStack(spacing: 22) {
+            column(left)
+            VStack(spacing: 22) {
+                VStack(spacing: 5) {
+                    Text("\(map.runningCount)").font(.serif(48, .medium))
+                    Text("sessions working").font(.system(size: 11))
+                    Circle().fill(map.runningCount > 0 ? Theme.addition : Theme.dotOff)
+                        .frame(width: 5, height: 5)
+                }
+                .foregroundStyle(Theme.accent)
+                .frame(width: 126, height: 126)
+                .background(Circle().fill(Theme.card))
+                .overlay(Circle().stroke(Theme.accent.opacity(0.3)))
+                .padding(8)
+                .background(Circle().fill(Theme.accent.opacity(0.06)))
+                .overlay(Circle().stroke(Theme.accent.opacity(0.15)))
+                .anchorPreference(key: MapAnchors.self, value: .bounds) { [.hub: $0] }
+                Text("Across \(map.containerSummary)")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: 142)
+            if !right.isEmpty { column(right) }
+        }
+        .frame(minHeight: 310)
+        .backgroundPreferenceValue(MapAnchors.self) { anchors in
+            GeometryReader { geometry in
+                if let hub = anchors[.hub] {
+                    let center = geometry[hub]
+                    Path { path in
+                        for group in groups {
+                            if let anchor = anchors[.group(group.id)] {
+                                let rect = geometry[anchor]
+                                let isLeft = rect.midX < center.midX
+                                let start = CGPoint(x: isLeft ? center.minX : center.maxX, y: center.midY)
+                                let end = CGPoint(x: isLeft ? rect.maxX : rect.minX, y: rect.midY)
+                                let middle = (start.x + end.x) / 2
+                                path.move(to: start)
+                                path.addCurve(to: end,
+                                              control1: CGPoint(x: middle, y: start.y),
+                                              control2: CGPoint(x: middle, y: end.y))
+                            }
+                        }
+                    }
+                    .stroke(Theme.accent.opacity(0.3), lineWidth: 1.3)
+                }
+            }
+            .accessibilityHidden(true)
+        }
+    }
+
+    private func column(_ groups: [HomeWorkMap.Group]) -> some View {
+        VStack(spacing: 24) {
+            ForEach(groups) { group in
+                groupCard(group)
+                    .anchorPreference(key: MapAnchors.self, value: .bounds) { [.group(group.id): $0] }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func groupCard(_ group: HomeWorkMap.Group) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                SidebarIdentityTile(avatar: group.identity.avatar, name: group.identity.containerName,
+                                    tint: group.identity.tint,
+                                    stacked: group.identity.session.workspaceID != nil, side: 25)
+                Text(group.identity.containerName)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("\(group.sessions.count)").font(.mono(10)).foregroundStyle(.secondary)
+            }
+            .padding(12)
+            ForEach(group.sessions) { live in
+                Rectangle().fill(Theme.hairline).frame(height: 1)
+                HomeMapSessionRow(live: live, selected: selectedID == live.id,
+                                  dimmed: needsYouOnly && !live.needsAttention) { select(live.id) }
+            }
+        }
+        .cardSurface(cornerRadius: 12)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(group.identity.containerName)
+    }
+
+    private var legend: some View {
+        HStack(spacing: 12) {
+            Label { Text("Working") } icon: { StateLight(tone: .running) }
+            Label { Text("Needs you") } icon: { StateLight(tone: .needsYou) }
+        }
+        .font(.system(size: 10.5)).foregroundStyle(.secondary)
+    }
+
+    private var caption: some View {
+        Text("Grouped by project or workspace")
+            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+    }
+}
+
+private struct MapAnchors: PreferenceKey {
+    enum Key: Hashable { case hub, group(UUID) }
+    static var defaultValue: [Key: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [Key: Anchor<CGRect>], nextValue: () -> [Key: Anchor<CGRect>]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct HomeMapSessionRow: View {
+    let live: HomeLive
+    let selected: Bool
+    let dimmed: Bool
+    let select: () -> Void
+    @State private var hovering = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button(action: select) {
+            HStack(spacing: 9) {
+                StateLight(tone: live.tone)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(live.session.title)
+                        .font(.system(size: 12, weight: .semibold)).lineLimit(2)
+                    Text("\(live.status) · \(live.session.agent.title)")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(selected ? live.tone.colour : .secondary)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.secondary)
+            }
+            .multilineTextAlignment(.leading)
+            .padding(12)
+            .background(selected ? live.tone.colour.opacity(0.1) : hovering ? Theme.field : .clear)
+            .overlay(alignment: .leading) {
+                if selected { Rectangle().fill(live.tone.colour).frame(width: 3) }
+            }
+            .overlay { if focused { Rectangle().stroke(Theme.accent, lineWidth: 2) } }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focused($focused)
+        .onHover { hovering = $0 }
+        .opacity(dimmed ? 0.4 : 1)
+        .accessibilityLabel("\(live.session.title), \(live.status), \(live.containerName)")
+        .accessibilityHint("Shows this session in the inspector")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}

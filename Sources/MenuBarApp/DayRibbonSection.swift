@@ -10,25 +10,33 @@ struct DayRibbonSection: View {
     // card claims an empty day for the moment between opening Home and the first scan
     // landing, which is the one moment the claim is most likely to be wrong.
     let scanned: Bool
+    var selectedSessionID: UUID? = nil
     let onOpen: (UUID) -> Void
 
     // The project the pointer picked out of the legend, which is how the same colour is
     // proved to mean the same project everywhere on the page. Nil means show everything.
     @State private var focused: String?
 
-    private static let bandHeight: CGFloat = 30
+    private static let laneHeight: CGFloat = 16
+    private var bandHeight: CGFloat { max(30, CGFloat(ribbon.lanes.count) * 20 - 4) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionRule(title: "WHERE THE DAY WENT") {
-                if !ribbon.isEmpty { headline }
+            ViewThatFits(in: .horizontal) {
+                HStack { Text("A day in parallel").font(.serif(20)); Spacer(); headline }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("A day in parallel").font(.serif(20))
+                    headline
+                }
             }
             card
+            Text("Last 24 hours · Summed session time, including parallel work")
+                .font(.system(size: 10.5)).foregroundStyle(.secondary)
         }
     }
 
     private var headline: some View {
-        (Text(DayRibbon.duration(ribbon.spent))
+        (Text(scanned ? DayRibbon.duration(ribbon.spent) : "Counting…")
             .font(.mono(11.5, .semibold))
             .foregroundStyle(Color.primary)
             + Text(verbatim: " of session time · \(counted(ribbon.legend.count, "project"))")
@@ -63,26 +71,42 @@ struct DayRibbonSection: View {
     }
 
     private var track: some View {
-        GeometryReader { geometry in
+        let lanes = ribbon.lanes
+        return GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 dayBreak(width: geometry.size.width)
-                ForEach(ribbon.blocks) { block in
-                    RibbonBlock(block: block,
-                                axis: ribbon.axis,
-                                width: geometry.size.width,
-                                height: Self.bandHeight,
-                                dimmed: dimmed(block.subject.name),
-                                open: { onOpen(block.sessionID) })
+                ForEach(lanes.indices, id: \.self) { lane in
+                    ForEach(lanes[lane]) { block in
+                        RibbonBlock(block: block,
+                                    axis: ribbon.axis,
+                                    width: geometry.size.width,
+                                    height: Self.laneHeight,
+                                    dimmed: dimmed(block.subject.name),
+                                    selected: selectedSessionID == block.sessionID,
+                                    open: { onOpen(block.sessionID) })
+                            .padding(.top, CGFloat(lane) * 20)
+                    }
                 }
             }
-            .frame(width: geometry.size.width, height: Self.bandHeight,
-                   alignment: .topLeading)
+            .frame(width: geometry.size.width, height: bandHeight, alignment: .topLeading)
         }
-        .frame(height: Self.bandHeight)
+        .frame(height: bandHeight)
         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.sunken))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .accessibilityRepresentation {
+            VStack {
+                ForEach(ribbon.blocks) { block in
+                    Button {
+                        onOpen(block.sessionID)
+                    } label: {
+                        Text("\(block.start.formatted(date: .abbreviated, time: .shortened)), \(block.subject.name), \(block.title), \(DayRibbon.duration(block.seconds))")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Shows this session in the inspector")
+                    .accessibilityAddTraits(selectedSessionID == block.sessionID ? .isSelected : [])
+                }
+            }
+        }
     }
-
     // Midnight inside a rolling 24 hours, so the half of the band that belongs to
     // yesterday is not read as part of today.
     @ViewBuilder private func dayBreak(width: CGFloat) -> some View {
@@ -91,7 +115,7 @@ struct DayRibbonSection: View {
             let scale = width / max(ribbon.axis.duration, 1)
             Rectangle()
                 .fill(Theme.chartGrid)
-                .frame(width: 1, height: Self.bandHeight)
+                .frame(width: 1, height: bandHeight)
                 .offset(x: midnight.timeIntervalSince(ribbon.axis.start) * scale)
         }
     }
@@ -141,6 +165,7 @@ private struct RibbonBlock: View {
     let width: CGFloat
     let height: CGFloat
     let dimmed: Bool
+    let selected: Bool
     let open: () -> Void
 
     // Below this a run disappears from the band entirely. Two neighbours can merge
@@ -164,6 +189,8 @@ private struct RibbonBlock: View {
                 .fill(block.subject.tint.colour)
                 .frame(width: span, height: height)
                 .brightness(hovering && !dimmed ? 0.06 : 0)
+                .overlay(RoundedRectangle(cornerRadius: 3)
+                    .stroke(selected ? Theme.accent : .clear, lineWidth: 2))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -173,7 +200,7 @@ private struct RibbonBlock: View {
         .motion(Motion.reveal, value: dimmed)
         .appTooltip(delay: .milliseconds(120)) { tooltip }
         .accessibilityLabel(spoken)
-        .accessibilityHint("Opens this session")
+        .accessibilityHint("Shows this session in the inspector")
         // Placed by layout rather than by an offset: an offset only moves the drawing,
         // so the hint would be anchored to where the block would sit without it.
         .padding(.leading, offset)

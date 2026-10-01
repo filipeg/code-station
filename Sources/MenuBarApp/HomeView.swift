@@ -13,13 +13,15 @@ struct HomeView: View {
     @Environment(WorkingTreeWatch.self) private var workingTrees
     @Environment(SessionTimeWatch.self) private var sessionTimes
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(GlobalCommandPaletteController.self) private var commandPalette
     @FocusState private var tourFocused: Bool
+    @State private var selectedSessionID: UUID?
+    @State private var needsYouOnly = false
 
     // Recomputed once per redraw and handed down, because every section below counts over
     // the same list of sessions.
     private struct Standing {
-        var running: [HomeLive] = []
-        var waiting: [HomeLive] = []
+        var sessions: [HomeLive] = []
         var resumable: [HomeLive] = []
         var addedToday = 0
         var removedToday = 0
@@ -43,9 +45,6 @@ struct HomeView: View {
             } else {
                 let standing = standing
                 status(standing)
-                    .task(id: reviewRoots(in: standing.waiting)) {
-                        workingTrees.refresh(reviewRoots(in: standing.waiting))
-                    }
             }
         }
         .background(Theme.background)
@@ -83,43 +82,136 @@ struct HomeView: View {
     // MARK: - Status
 
     private func status(_ standing: Standing) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                stats(standing)
-                if !standing.waiting.isEmpty { needsYou(standing.waiting) }
-                if !standing.running.isEmpty { runningNow(standing.running) }
-                timeSpent(standing)
-                if !standing.resumable.isEmpty { resume(standing.resumable) }
-                if !oldSessions.isEmpty { cleanup() }
+        let map = HomeWorkMap(sessions: standing.sessions)
+        let selected = map.selection(selectedSessionID, needsYouOnly: needsYouOnly)
+        return GeometryReader { geometry in
+            ScrollViewReader { scroll in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        hero(map)
+                        overview(map, selected: selected, width: geometry.size.width - 48)
+                            .id("work-map")
+                        timeSpent(standing) { id in
+                            select(id)
+                            scroll.scrollTo("work-map", anchor: .top)
+                        }
+                        dailyTotals(standing)
+                        resume(standing, select: { id in
+                            select(id)
+                            scroll.scrollTo("work-map", anchor: .top)
+                        })
+                        if !oldSessions.isEmpty { cleanup() }
+                    }
+                    .padding(24)
+                }
             }
-            .padding(24)
         }
     }
 
-    private func stats(_ standing: Standing) -> some View {
-        let changed = standing.addedToday > 0 || standing.removedToday > 0
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4),
-                         spacing: 12) {
-            StatCard(label: "RUNNING",
-                     value: "\(standing.running.count)",
-                     tone: standing.running.isEmpty ? nil : Theme.addition,
-                     note: standing.running.isEmpty
-                        ? "Nothing is working right now"
-                        : runningNote(standing.running))
-            StatCard(label: "NEEDS YOU",
-                     value: "\(standing.waiting.count)",
-                     tone: standing.waiting.isEmpty ? nil : Theme.attentionText,
-                     note: waitingNote(standing.waiting))
-            StatCard(label: "CHANGED TODAY",
-                     value: changed ? "+\(standing.addedToday) / −\(standing.removedToday)" : "—",
-                     tone: nil,
-                     note: changedNote(standing))
-            StatCard(label: "WORKTREES",
-                     value: "\(standing.worktrees.count)",
-                     tone: nil,
-                     note: standing.worktrees.isEmpty
-                        ? "Nothing checked out on the side"
-                        : "across \(counted(standing.worktreeSessions, "session"))")
+    private func hero(_ map: HomeWorkMap) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 20) { introduction(map); Spacer(minLength: 12); newSession }
+            VStack(alignment: .leading, spacing: 14) { introduction(map); newSession }
+        }
+    }
+
+    private func introduction(_ map: HomeWorkMap) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Your work, in motion.").font(.serif(36, .medium))
+            Text("\(counted(map.runningCount, "session")) working. "
+                 + (map.waiting.isEmpty ? "You're all caught up." : "\(map.waiting.count) need your attention."))
+                .font(.system(size: 13)).foregroundStyle(.secondary)
+        }
+    }
+
+    private var newSession: some View {
+        ActionButton(title: "New session", tone: .green, height: 36, icon: "plus", disclosure: true)
+            .appMenu {
+                var items = store.regularProjects.filter { !store.isMissing($0) }.map { project in
+                    MenuItem(label: project.name, icon: "folder", subtitle: project.collapsedPath) {
+                        store.selectProject(project.id)
+                        commandPalette.requestNewSession()
+                    }
+                }
+                items += store.workspaces.filter { workspace in
+                    workspace.projectIDs.compactMap(store.project).allSatisfy { !store.isMissing($0) }
+                }.map { workspace in
+                    MenuItem(label: workspace.name, icon: "square.grid.2x2", subtitle: "Workspace") {
+                        store.selectWorkspace(workspace.id)
+                        commandPalette.requestNewSession()
+                    }
+                }
+                return [.searchable(items, prompt: "Choose a project or workspace",
+                                    noResults: "No available project or workspace.")]
+            }
+    }
+
+    private func overview(_ map: HomeWorkMap, selected: HomeLive?, width: CGFloat) -> some View {
+        let wide = width >= 1000
+        let layout = wide ? AnyLayout(HStackLayout(alignment: .top, spacing: 18))
+                          : AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
+        return layout {
+            HomeWorkMapView(map: map, selectedID: selected?.id, needsYouOnly: $needsYouOnly,
+                            compact: wide ? width - 338 < 650 : width < 650) { id in
+                selectedSessionID = id
+                if !map.waiting.contains(where: { $0.id == id }) { needsYouOnly = false }
+            }
+            VStack(spacing: 14) {
+                if let selected {
+                    inspector(selected)
+                } else {
+                    PaneMessage(icon: "checkmark.circle", title: "You're all caught up",
+                                detail: "Select a session to see its recap and next action.")
+                        .cardSurface(cornerRadius: 14)
+                }
+                HomeAccountUsage()
+            }
+            .frame(width: wide ? 320 : nil)
+            .frame(maxWidth: wide ? nil : .infinity)
+        }
+    }
+
+    private func inspector(_ live: HomeLive) -> some View {
+        let target = recapTarget(for: live.session)
+        let roots = Array(Set(store.workingDirectories(for: live.session))).sorted()
+        let inspected = roots.allSatisfy(workingTrees.hasInspected)
+        return HomeSessionInspector(
+            live: live, hasChanges: hasChanges(in: live.session),
+            changedFiles: inspected ? roots.reduce(0) { $0 + workingTrees.uncommittedFileCount(at: $1) } : nil,
+            recap: store.recap(for: target), recapping: runner.isRecapping(target),
+            canRecap: runner.canRecap(target, store: store),
+            offersManualRecap: !appSettings.sessionRecapsEnabled,
+            onRecap: { _ = runner.recap(target, store: store) },
+            onOpen: { store.selectSession(live.id, destination: $0) })
+            .task(id: roots) {
+                while !Task.isCancelled {
+                    workingTrees.refresh(roots)
+                    try? await Task.sleep(for: WorkingTreeWatch.interval)
+                }
+            }
+    }
+
+    private func select(_ id: UUID) {
+        selectedSessionID = id
+        needsYouOnly = false
+    }
+
+    private func dailyTotals(_ standing: Standing) -> some View {
+        FlowRow(spacing: 22) {
+            HStack(spacing: 8) {
+                if scanned(standing) {
+                    DiffPair(added: standing.addedToday, removed: standing.removedToday, size: 14)
+                } else {
+                    Text("Counting…").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Text("lines changed today").font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
+            .appTooltip(changedNote(standing))
+            Text("\(counted(standing.sessionsToday, "session")) today")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            Text("\(counted(standing.worktrees.count, "worktree"))")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                .appTooltip("Across \(counted(standing.worktreeSessions, "session"))")
         }
     }
 
@@ -140,64 +232,17 @@ struct HomeView: View {
 
     // MARK: - Where the day went
 
-    private func timeSpent(_ standing: Standing) -> some View {
+    private func timeSpent(_ standing: Standing, select: @escaping (UUID) -> Void) -> some View {
         DayRibbonSection(
             ribbon: DayRibbon.build(standing.timeline,
                                     spans: sessionTimes.spans(for:),
                                     now: Date()),
             scanned: scanned(standing),
-            onOpen: { store.selectSession($0) })
+            selectedSessionID: selectedSessionID,
+            onOpen: select)
             .task(id: standing.timeRequests) {
                 sessionTimes.refresh(standing.timeRequests)
             }
-    }
-
-    // The projects behind the count, each named once however many sessions it is running.
-    private func runningNote(_ running: [HomeLive]) -> String {
-        var seen: Set<String> = []
-        return running.map(\.containerName).filter { seen.insert($0).inserted }
-            .joined(separator: ", ")
-    }
-
-    private func waitingNote(_ waiting: [HomeLive]) -> String {
-        guard !waiting.isEmpty else { return "Nothing is waiting on you" }
-        let permissions = waiting.count { $0.permission != nil }
-        let reviews = waiting.count - permissions
-        var parts: [String] = []
-        if permissions > 0 { parts.append(counted(permissions, "permission")) }
-        if reviews > 0 { parts.append(counted(reviews, "review")) }
-        return parts.joined(separator: " · ")
-    }
-
-    private func needsYou(_ waiting: [HomeLive]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionRule("NEEDS YOU", dot: Theme.attention, tint: Theme.attentionText)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2),
-                      spacing: 12) {
-                ForEach(waiting.prefix(4)) { live in
-                    let recapTarget = recapTarget(for: live.session)
-                    NeedsYouCard(live: live,
-                                 hasChanges: hasChanges(in: live.session),
-                                 recap: store.recap(for: live.session.id),
-                                 recapping: runner.isRecapping(recapTarget),
-                                 canRecap: runner.canRecap(recapTarget, store: store),
-                                 offersManualRecap: !appSettings.sessionRecapsEnabled,
-                                 onRecap: { _ = runner.recap(recapTarget, store: store) },
-                                 onOpen: { destination in
-                                     store.selectSession(
-                                         live.session.id,
-                                         destination: destination == .conversation
-                                             ? live.destination
-                                             : destination)
-                                 })
-                }
-            }
-        }
-    }
-
-    private func reviewRoots(in waiting: [HomeLive]) -> [String] {
-        Array(Set(waiting.prefix(4).flatMap { store.workingDirectories(for: $0.session) }))
-            .sorted()
     }
 
     private func hasChanges(in session: ChatSession) -> Bool {
@@ -213,29 +258,30 @@ struct HomeView: View {
         return store.designConversation(for: session.id)?.id ?? session.id
     }
 
-    private func runningNow(_ running: [HomeLive]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionRule("RUNNING NOW", pulses: true, tint: Theme.addition)
-            VStack(spacing: 8) {
-                ForEach(running) { live in
-                    RunningRow(live: live) {
-                        store.selectSession(live.session.id, destination: live.destination)
+    private func resume(_ standing: Standing, select: @escaping (UUID) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Still on your mind?").font(.serif(20))
+                Spacer()
+                ActionButton(title: "All \(standing.sessions.count) sessions", tone: .outlined,
+                             height: 28, size: 11.5, disclosure: true)
+                    .appMenu {
+                        [.searchable(standing.sessions.map { live in
+                            MenuItem(label: live.session.title, projectTint: live.tint,
+                                     badge: live.status, subtitle: live.containerName,
+                                     handler: { select(live.id) })
+                        }, prompt: "Find a session", noResults: "No sessions match your search.")]
                     }
-                }
             }
-        }
-    }
-
-    private func resume(_ resumable: [HomeLive]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionRule("PICK UP WHERE YOU LEFT OFF")
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
-                      spacing: 10) {
-                ForEach(resumable.prefix(8)) { live in
-                    ResumeCard(live: live) {
-                        store.selectSession(live.session.id, destination: live.destination)
+            if !standing.resumable.isEmpty {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                    ForEach(standing.resumable.prefix(6)) { live in
+                        ResumeCard(live: live, selected: selectedSessionID == live.id) { select(live.id) }
                     }
                 }
+            } else {
+                Text("Recent conversations will appear here when you're ready to return to them.")
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary)
             }
         }
     }
@@ -313,11 +359,8 @@ struct HomeView: View {
                 }
             }
 
-            if permission != nil || finished || card.tone == .needsYou {
-                standing.waiting.append(card)
-            } else if busy {
-                standing.running.append(card)
-            } else if session.hasStarted || live.hasStarted {
+            standing.sessions.append(card)
+            if card.tone == .idle, session.hasStarted || live.hasStarted {
                 standing.resumable.append(card)
             }
 
@@ -384,13 +427,8 @@ struct HomeView: View {
                 backgroundTasks: runner.backgroundTasks(live.id)),
             location: location(session, checkouts: checkouts),
             destination: live.id == session.id ? .conversation : .design,
-            // Nothing reports how far through a turn is, so how full the context window
-            // has become is the honest stand-in: it is the one number that only ever grows
-            // while a turn runs. A turn parked on a task is not filling it any more, and a
-            // bar creeping along would be claiming work that has stopped.
-            progress: busy && !waiting
-                ? (live.usage?.contextFraction(for: live.agent) ?? 0.05) : nil,
-            permission: permission)
+            permission: permission,
+            finished: finished)
     }
 
     private func location(_ session: ChatSession, checkouts: [SessionProject]) -> String {
@@ -400,135 +438,7 @@ struct HomeView: View {
     }
 }
 
-// One session with everything a row needs already looked up, so a row never reaches back
-// into the store while it draws.
-private struct HomeLive: Identifiable {
-    let session: ChatSession
-    let containerName: String
-    let tint: Theme.ProjectTint
-    let avatar: SidebarAvatar
-    let tone: SessionTone
-    let activity: String
-    let location: String
-    // Where opening this row lands. A session whose Design conversation is the one
-    // working opens on the board, since the chat is not what the row was describing.
-    let destination: SessionDestination
-    // Only a running session has one, since a progress bar on an idle row would be
-    // claiming something is still happening.
-    let progress: Double?
-    let permission: PermissionRequest?
-
-    var id: UUID { session.id }
-}
-
-// MARK: - Cards
-
-private struct StatCard: View {
-    let label: String
-    let value: String
-    let tone: Color?
-    let note: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.mono(9.5, .semibold))
-                .kerning(1.2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.serif(32, .medium))
-                .foregroundStyle(tone ?? Color.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-            Text(note)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .cardSurface(cornerRadius: 12)
-    }
-}
-
-private struct NeedsYouCard: View {
-    let live: HomeLive
-    let hasChanges: Bool
-    let recap: SessionRecap?
-    let recapping: Bool
-    let canRecap: Bool
-    let offersManualRecap: Bool
-    let onRecap: () -> Void
-    let onOpen: (SessionDestination) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                ProjectDot(tint: live.tint, size: 7)
-                Text(live.containerName.uppercased())
-                    .font(.mono(10))
-                    .kerning(0.6)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 6)
-                MonoChip(text: live.permission == nil ? "FINISHED" : "PERMISSION",
-                         size: 9, tint: Theme.attentionText)
-                Text(RelativeTime.short(live.session.lastActivity))
-                    .font(.mono(10))
-                    .foregroundStyle(.tertiary)
-            }
-
-            Text(live.session.title)
-                .font(.serif(20, .semibold))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let recap, live.permission == nil {
-                HomeRecap(recap: recap)
-            } else {
-                Text(live.activity)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            HStack(spacing: 8) {
-                if live.permission != nil {
-                    ActionButton(title: "Answer") { onOpen(.conversation) }
-                } else if hasChanges {
-                    ActionButton(title: "Review changes") { onOpen(.changes) }
-                } else {
-                    ActionButton(title: "Review result") { onOpen(.conversation) }
-                }
-                if live.permission == nil, recap == nil {
-                    if recapping {
-                        ActionButton(title: "Recapping", tone: .outlined,
-                                     icon: "sparkles")
-                            .disabled(true)
-                    } else if offersManualRecap, canRecap {
-                        ActionButton(title: "Generate recap", tone: .outlined,
-                                     icon: "sparkles", action: onRecap)
-                    }
-                }
-                Spacer(minLength: 6)
-                DiffPair(added: live.session.summary.added,
-                         removed: live.session.summary.removed, size: 11.5)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 15)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 12)
-            .stroke(Theme.attention.opacity(0.45), lineWidth: 1.3))
-    }
-}
-
-private struct HomeRecap: View {
+struct HomeRecap: View {
     let recap: SessionRecap
 
     var body: some View {
@@ -558,61 +468,9 @@ private struct HomeRecap: View {
     }
 }
 
-private struct RunningRow: View {
-    let live: HomeLive
-    let onOpen: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 14) {
-                SidebarIdentityTile(
-                    avatar: live.avatar,
-                    name: live.containerName,
-                    tint: live.tint,
-                    dashed: live.avatar.subject == .task,
-                    stacked: live.avatar.subject == .workspace)
-                Text(live.containerName.uppercased())
-                    .font(.mono(10.5))
-                    .kerning(0.5)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(width: 130, alignment: .leading)
-                Text(live.session.title)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .lineLimit(1)
-                    .frame(width: 240, alignment: .leading)
-                Text(live.activity)
-                    .font(.mono(11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                DiffPair(added: live.session.summary.added,
-                         removed: live.session.summary.removed)
-                Text(RelativeTime.short(live.session.lastActivity))
-                    .font(.mono(10.5))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 34, alignment: .trailing)
-                if let progress = live.progress {
-                    Meter(fraction: progress, colour: Theme.dotOn, height: 4)
-                        .frame(width: 92)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .surface(hovering ? Theme.field : Theme.card, cornerRadius: 11,
-                     border: Theme.dotOn.opacity(0.35))
-            .contentShape(RoundedRectangle(cornerRadius: 11))
-        }
-        .buttonStyle(.plain)
-        .motion(Motion.hover, value: hovering)
-        .onHover { hovering = $0 }
-    }
-}
-
 private struct ResumeCard: View {
     let live: HomeLive
+    let selected: Bool
     let onOpen: () -> Void
 
     @State private var hovering = false
@@ -652,10 +510,12 @@ private struct ResumeCard: View {
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 11)
-                .fill(hovering ? Theme.field : Theme.sunken))
+                .fill(selected ? Theme.accent.opacity(0.08) : hovering ? Theme.field : Theme.sunken))
             .contentShape(RoundedRectangle(cornerRadius: 11))
         }
         .buttonStyle(.plain)
+        .accessibilityHint("Shows this session in the inspector")
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .hoverLift(hovering)
         .onHover { hovering = $0 }
     }
