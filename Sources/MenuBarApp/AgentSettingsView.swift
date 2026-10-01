@@ -18,6 +18,8 @@ final class ClaudeAgentInfo {
     private(set) var path: String?
     private(set) var version: String?
     private(set) var account: Account?
+    private(set) var isCheckingVersion = false
+    private(set) var versionCheckFailed = false
     @ObservationIgnored private var versionTask: Task<Void, Never>?
 
     init() { refresh() }
@@ -27,7 +29,10 @@ final class ClaudeAgentInfo {
         path = ProcessManager.resolve("claude")
         account = Self.readAccount()
         version = nil
+        isCheckingVersion = false
+        versionCheckFailed = false
         guard let path else { return }
+        isCheckingVersion = true
         let searchPath = ProcessManager.searchPath
         versionTask = Task {
             // The CLI prints "2.1.220 (Claude Code)"; the number is the part worth keeping.
@@ -35,7 +40,14 @@ final class ClaudeAgentInfo {
                 .split(separator: " ").first.map(String.init)
             guard !Task.isCancelled else { return }
             self.version = version
+            self.versionCheckFailed = version == nil
+            self.isCheckingVersion = false
         }
+    }
+
+    var readiness: AgentReadiness {
+        AgentReadiness(installed: path != nil, signedIn: account != nil,
+                       checking: isCheckingVersion, failed: versionCheckFailed)
     }
 
     // MARK: - Private
@@ -81,6 +93,8 @@ final class CodexAgentInfo {
     private(set) var usage: CodexUsage?
     private(set) var isRefreshingUsage = false
     private var refreshID = UUID()
+    private(set) var isCheckingVersion = false
+    private(set) var versionCheckFailed = false
     @ObservationIgnored private var versionTask: Task<Void, Never>?
     @ObservationIgnored private var usageTask: Task<Void, Never>?
 
@@ -92,10 +106,13 @@ final class CodexAgentInfo {
         path = ProcessManager.resolve("codex")
         account = Self.readAccount()
         version = nil
+        isCheckingVersion = false
+        versionCheckFailed = false
         usage = nil
         isRefreshingUsage = false
         refreshID = UUID()
         guard let path else { return }
+        isCheckingVersion = true
         let searchPath = ProcessManager.searchPath
         let id = refreshID
         versionTask = Task {
@@ -104,6 +121,8 @@ final class CodexAgentInfo {
                 .split(separator: " ").last.map(String.init)
             guard !Task.isCancelled, refreshID == id else { return }
             self.version = version
+            self.versionCheckFailed = version == nil
+            self.isCheckingVersion = false
         }
         guard account != nil else { return }
         isRefreshingUsage = true
@@ -113,6 +132,11 @@ final class CodexAgentInfo {
             self.usage = usage
             self.isRefreshingUsage = false
         }
+    }
+
+    var readiness: AgentReadiness {
+        AgentReadiness(installed: path != nil, signedIn: account != nil,
+                       checking: isCheckingVersion, failed: versionCheckFailed)
     }
 
     static func readAccount() -> Account? {
@@ -172,7 +196,10 @@ final class CopilotAgentInfo {
     private(set) var version: String?
     private(set) var account: CopilotServer.AuthStatus?
     private(set) var isCheckingAccount = false
+    private(set) var accountCheckFailed = false
     private var refreshID = UUID()
+    private(set) var isCheckingVersion = false
+    private(set) var versionCheckFailed = false
     @ObservationIgnored private var versionTask: Task<Void, Never>?
     @ObservationIgnored private var accountTask: Task<Void, Never>?
 
@@ -183,10 +210,14 @@ final class CopilotAgentInfo {
         accountTask?.cancel()
         path = ProcessManager.resolve("copilot")
         version = nil
+        isCheckingVersion = false
+        versionCheckFailed = false
         account = nil
         isCheckingAccount = false
+        accountCheckFailed = false
         refreshID = UUID()
         guard let path else { return }
+        isCheckingVersion = true
         let searchPath = ProcessManager.searchPath
         let id = refreshID
         versionTask = Task {
@@ -198,14 +229,23 @@ final class CopilotAgentInfo {
                 .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
             guard !Task.isCancelled, refreshID == id else { return }
             self.version = version
+            self.versionCheckFailed = version == nil
+            self.isCheckingVersion = false
         }
         isCheckingAccount = true
         accountTask = Task {
             let status = await CopilotServer.authStatus(at: path, searchPath: searchPath)
             guard !Task.isCancelled, refreshID == id else { return }
             self.account = status?.isAuthenticated == true ? status : nil
+            self.accountCheckFailed = status == nil
             self.isCheckingAccount = false
         }
+    }
+
+    var readiness: AgentReadiness {
+        AgentReadiness(installed: path != nil, signedIn: account != nil,
+                       checking: isCheckingVersion || isCheckingAccount,
+                       failed: versionCheckFailed || accountCheckFailed)
     }
 }
 

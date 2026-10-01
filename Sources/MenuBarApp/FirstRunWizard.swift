@@ -1,93 +1,49 @@
 import SwiftUI
 
-// The first launch explains the app, imports any shared team setup, and connects a coding
-// agent. Agent installation and sign-in still belong to the CLI, so setup runs those
-// commands in a real terminal and reads their state back afterwards.
 struct FirstRunWizard: View {
-    private enum Step: Int, CaseIterable {
-        case welcome
-        case features
-        case configuration
-        case agent
-
-        var title: String {
-            switch self {
-            case .welcome: "Welcome"
-            case .features: "What you can do"
-            case .configuration: "Team configuration"
-            case .agent: "Coding agent"
-            }
-        }
-    }
-
-    private enum TerminalAction: Identifiable {
+    enum TerminalAction: Identifiable {
         case install(AgentKind)
         case signIn(AgentKind)
 
-        var id: String {
+        var agent: AgentKind {
             switch self {
-            case .install(let agent): "install-\(agent.rawValue)"
-            case .signIn(let agent): "sign-in-\(agent.rawValue)"
+            case .install(let agent), .signIn(let agent): agent
             }
         }
 
+        var id: String { title }
+
         var title: String {
             switch self {
-            case .install(let agent): "Install \(agent.title)"
-            case .signIn(let agent): "Sign in to \(agent.title)"
+            case .install: "Install \(agent.title)"
+            case .signIn: "Sign in to \(agent.title)"
             }
         }
 
         var note: String {
             switch self {
-            case .install:
-                "The install command is running below. Close this terminal when it finishes."
-            case .signIn:
-                "Follow the CLI's login below, then close this terminal when it is done."
+            case .install: "The install command is running below. Close this terminal when it finishes."
+            case .signIn: "Follow the CLI's login below, then close this terminal when it is done."
             }
         }
 
         var command: String {
             switch self {
-            case .install(let agent): agent.installHint
-            case .signIn(let agent): agent.loginCommand
+            case .install: agent.installHint
+            case .signIn: agent.loginCommand
             }
         }
     }
 
-    private struct Feature: Identifiable {
-        let icon: String
-        let title: String
-        let detail: String
-
-        var id: String { title }
-    }
-
-    private let features = [
-        Feature(icon: "arrow.triangle.branch",
-                title: "Run work in parallel",
-                detail: "Give each session its own Git worktree and branch, or work directly in the project folder."),
-        Feature(icon: "text.bubble.fill",
-                title: "Keep the whole conversation",
-                detail: "Follow replies, tool activity, permissions, token use and background work in one timeline."),
-        Feature(icon: "doc.text.magnifyingglass",
-                title: "Review every change",
-                detail: "Browse project files and inspect the full diff without leaving the session."),
-        Feature(icon: "wrench.and.screwdriver.fill",
-                title: "Use the tools around the work",
-                detail: "Open terminals, manage Git, inspect Docker, send API requests and connect MCP servers."),
-    ]
-
     @Environment(SessionRunner.self) private var runner
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    @State private var step = Step.welcome
-    @State private var selectedAgent: AgentKind
+    @Environment(ProjectStore.self) private var store
+    @State private var setup: FirstRunSetup
     @State private var claude = ClaudeAgentInfo()
     @State private var codex = CodexAgentInfo()
     @State private var copilot = CopilotAgentInfo()
     @State private var terminalAction: TerminalAction?
-    @State private var loader = SiteConfigurationLoader()
+    @State private var terminalAgent: AgentKind?
+    @State private var terminalReturn = 0
 
     let onSiteConfigurationLoaded: () -> Void
     let onFinish: () -> Void
@@ -95,393 +51,534 @@ struct FirstRunWizard: View {
     init(initialAgent: AgentKind,
          onSiteConfigurationLoaded: @escaping () -> Void,
          onFinish: @escaping () -> Void) {
-        _selectedAgent = State(initialValue: initialAgent)
+        _setup = State(initialValue: FirstRunSetup(initialAgent: initialAgent))
         self.onSiteConfigurationLoaded = onSiteConfigurationLoaded
         self.onFinish = onFinish
     }
 
     var body: some View {
+        FirstRunWizardContent(
+            setup: setup,
+            readiness: [.claudeCode: claude.readiness, .codex: codex.readiness,
+                        .copilot: copilot.readiness],
+            terminalReturn: terminalReturn,
+            refresh: refresh,
+            openTerminal: {
+                terminalAgent = $0.agent
+                terminalAction = $0
+            },
+            applyConfiguration: onSiteConfigurationLoaded,
+            finish: finish)
+            .sheet(item: $terminalAction, onDismiss: {
+                refresh(terminalAgent)
+                terminalReturn += 1
+            }) { action in
+                AgentCommandSheet(title: action.title, note: action.note, command: action.command)
+                    .appOverlays()
+            }
+    }
+
+    private func refresh(_ agent: AgentKind?) {
+        runner.refreshAvailableAgents()
+        if agent == nil || agent == .claudeCode { claude.refresh() }
+        if agent == nil || agent == .codex { codex.refresh() }
+        if agent == nil || agent == .copilot { copilot.refresh() }
+    }
+
+    private func finish(openProject: Bool) {
+        guard setup.finish(in: store, openProject: openProject) else { return }
+        runner.refreshAvailableAgents()
+        if !setup.agentWasDeferred, runner.isAvailable(setup.selectedAgent) {
+            runner.agent = setup.selectedAgent
+        }
+        onFinish()
+    }
+}
+
+struct FirstRunWizardContent: View {
+    @Bindable var setup: FirstRunSetup
+    let readiness: [AgentKind: AgentReadiness]
+    var terminalReturn = 0
+    let refresh: (AgentKind?) -> Void
+    let openTerminal: (FirstRunWizard.TerminalAction) -> Void
+    let applyConfiguration: () -> Void
+    let finish: (Bool) -> Void
+
+    @Environment(DialogPresenter.self) private var dialogs
+    @Environment(\.textScale) private var textScale
+    @FocusState private var focused: Focus?
+    @AccessibilityFocusState private var headingFocused: Bool
+    @State private var returnsFocusToAgentAction = false
+
+    private enum Focus: Hashable {
+        case agent(AgentKind), tour, terminal, primary, folder
+    }
+
+    private var state: AgentReadiness { readiness[setup.selectedAgent] ?? .checking }
+    private var scale: CGFloat { max(1, textScale) }
+
+    var body: some View {
         VStack(spacing: 0) {
             header
-            ZStack {
-                switch step {
-                case .welcome: welcome.transition(.fadeIn)
-                case .features: featureTour.transition(.fadeIn)
-                case .configuration: configurationSetup.transition(.fadeIn)
-                case .agent: agentSetup.transition(.fadeIn)
+            stepIndicator
+            ScrollViewReader { scroll in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Color.clear.frame(height: 0).id("top")
+                        switch setup.step {
+                        case .agent: agentSetup
+                        case .configuration: configurationSetup
+                        case .project: projectSetup
+                        }
+                    }
+                    .padding(.horizontal, 40)
+                    .padding(.top, 9)
+                    .padding(.bottom, 28)
+                }
+                .onChange(of: setup.step) { _, _ in
+                    scroll.scrollTo("top", anchor: .top)
+                    headingFocused = true
+                    focused = .primary
+                    announce("Step \(setup.step.rawValue + 1) of 3: \(setup.step.title)")
+                }
+                .onChange(of: setup.loader.failure) { _, failure in
+                    if let failure {
+                        scroll.scrollTo("import-result", anchor: .bottom)
+                        announce(failure)
+                    }
+                }
+                .onChange(of: setup.loader.selection) { _, selection in
+                    if let selection {
+                        scroll.scrollTo("import-result", anchor: .bottom)
+                        announce("Team settings loaded. \(selection.summary)")
+                    }
+                }
+                .onChange(of: setup.projectFailure) { _, failure in
+                    if let failure {
+                        scroll.scrollTo("project-error", anchor: .bottom)
+                        announce(failure)
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             footer
         }
-        .frame(width: 760, height: 590)
+        .frame(width: 860)
+        .frame(idealHeight: 620, maxHeight: 620)
         .background(Theme.background)
         .interactiveDismissDisabled()
-        .sheet(item: $terminalAction, onDismiss: refreshAgentState) { action in
-            AgentCommandSheet(title: action.title,
-                              note: action.note,
-                              command: action.command)
-                .appOverlays()
+        .disabled(dialogs.current != nil)
+        .accessibilityHidden(dialogs.current != nil)
+        .onChange(of: readiness) { old, new in
+            if returnsFocusToAgentAction, state != .checking {
+                focused = .terminal
+                returnsFocusToAgentAction = false
+            }
+            guard setup.step == .agent, dialogs.current == nil else { return }
+            let updates = AgentKind.allCases.filter { old[$0] != new[$0] }
+                .map { "\($0.title): \(new[$0]?.label ?? "Checking…")" }
+            if !updates.isEmpty { announce(updates.joined(separator: ". ")) }
+        }
+        .onChange(of: setup.loader.isLoading) { _, loading in
+            if loading { announce("Loading team settings") }
+        }
+        .onChange(of: terminalReturn) { _, _ in
+            returnsFocusToAgentAction = state == .checking
+            if !returnsFocusToAgentAction { focused = .terminal }
         }
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
-            AppMark()
-                .frame(width: 38, height: 38)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Teya Code Station")
-                    .font(.logo(16, weight: 650))
-                Text(step.title)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 20)
-            stepIndicator
+        HStack(spacing: 12) {
+            AppMark().frame(width: 37, height: 37).accessibilityHidden(true)
+            Text("Teya Code Station").font(.logo(14, weight: 650))
+            Spacer()
+            Text("Step \(setup.step.rawValue + 1) of 3")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 26)
         .headerBand()
     }
 
     private var stepIndicator: some View {
-        HStack(spacing: 7) {
-            ForEach(Step.allCases, id: \.rawValue) { item in
-                Capsule()
-                    .fill(item.rawValue <= step.rawValue ? Theme.accent : Theme.border)
-                    .frame(width: item == step ? 28 : 9, height: 6)
+        HStack(spacing: 24) {
+            ForEach(FirstRunSetup.Step.allCases, id: \.rawValue) { step in
+                HStack(spacing: 7) {
+                    Text(step.rawValue < setup.step.rawValue ? "✓" : "\(step.rawValue + 1)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(step == setup.step ? Color.white : Theme.accent)
+                        .frame(width: 19, height: 19)
+                        .background(Circle().fill(step == setup.step ? Theme.accentFill : Theme.field))
+                    Text(step.title)
+                        .font(.system(size: 11, weight: step == setup.step ? .semibold : .regular))
+                        .foregroundStyle(step == setup.step ? Theme.accent : Color.secondary)
+                }
             }
+            Spacer(minLength: 0)
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: step)
+        .padding(.horizontal, 40)
+        .padding(.top, 20)
+        .padding(.bottom, 10)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Step \(step.rawValue + 1) of \(Step.allCases.count): \(step.title)")
+        .accessibilityLabel("Step \(setup.step.rawValue + 1) of 3: \(setup.step.title)")
     }
 
-    private var welcome: some View {
-        HStack(spacing: 48) {
-            AppMark()
-                .frame(width: 190, height: 190)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Your coding agents,\nworking in the open.")
-                    .font(.serif(34, .semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Code Station brings Codex and Claude Code together with your projects, Git state, files and terminals. You stay in control while the agent does the work.")
-                    .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 390, alignment: .leading)
-                HStack(spacing: 8) {
-                    welcomeChip("Local projects")
-                    welcomeChip("Real CLIs")
-                    welcomeChip("Your Git history")
-                }
-            }
-        }
-        .padding(52)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func welcomeChip(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.mono(9.5, .semibold))
-            .kerning(0.7)
-            .foregroundStyle(Theme.accent)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent.opacity(0.09)))
-    }
-
-    private var featureTour: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Everything around the agent, in one place")
-                    .font(.serif(25))
-                Text("A session keeps the work, the conversation and the result together.")
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(.secondary)
-            }
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14),
-                                GridItem(.flexible(), spacing: 14)], spacing: 14) {
-                ForEach(features) { feature in
-                    featureCard(feature)
-                }
-            }
-        }
-        .padding(34)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private func featureCard(_ feature: Feature) -> some View {
-        HStack(alignment: .top, spacing: 13) {
-            Image(systemName: feature.icon)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 36, height: 36)
-                .background(Circle().fill(Theme.accent.opacity(0.09)))
-            VStack(alignment: .leading, spacing: 5) {
-                Text(feature.title)
-                    .font(.serif(16))
-                Text(feature.detail)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
-        .cardSurface(cornerRadius: 12)
-    }
-
-    private var configurationSetup: some View {
-        @Bindable var loader = loader
-        return VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Add your team's configuration")
-                    .font(.serif(25))
-                Text("One JSON file gives Code Station the shared setup that belongs to your organisation: Dispatch sign-in and starter requests, MCP presets, the skills marketplace, and useful command shortcuts. Personal tokens and passwords are never stored in it.")
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            SourcePicker(repositoryURL: $loader.repositoryURL,
-                         repositoryTitle: "Load from GitHub",
-                         repositoryDetail: "Clone a repository using your existing Git access and read its root configuration file.",
-                         placeholder: "https://github.com/org/settings",
-                         fileTitle: "Choose a file",
-                         fileDetail: "Load a site defaults JSON file already on this Mac.",
-                         fileButton: "Choose JSON file",
-                         isLoading: loader.isLoading,
-                         loadRepository: loader.loadRepository) {
-                loader.chooseFile(message: "Choose the JSON file containing your organisation's shared Code Station setup.")
-            }
-
-            Text("A repository can provide site-defaults.json, teya-defaults.json, or one root-level JSON file.")
-                .font(.system(size: 11))
+    private func heading(_ title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(.serif(31 * scale, .semibold))
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityFocused($headingFocused)
+            Text(detail)
+                .font(.system(size: 13 * scale))
                 .foregroundStyle(.secondary)
-
-            if let selection = loader.selection {
-                SourceLoaded(title: selection.sourceName, detail: selection.summary)
-            } else if let failure = loader.failure {
-                SourceFailure(failure)
-            }
         }
-        .padding(30)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var agentSetup: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Choose your coding agent")
-                    .font(.serif(25))
-                Text("Code Station runs the agent's own CLI and uses its existing account. You can add the other agent later in Settings.")
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 18) {
+            heading("Connect your coding agent",
+                    detail: "Use Claude Code, Codex, or Copilot with your local projects. Code Station uses the agent's own CLI and account.")
+            HStack(spacing: 12) {
+                ForEach(AgentKind.allCases) { agent in agentChoice(agent) }
             }
-
-            HStack(spacing: 10) {
-                ForEach(AgentKind.allCases) { agent in
-                    agentChoice(agent)
-                }
-            }
-
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Coding agent")
             setupCard
+            HStack {
+                Text("You can change agents for each session.")
+                    .font(.system(size: 11 * scale)).foregroundStyle(.secondary)
+                Spacer()
+                InlineLink(title: "Check all agents again") { refresh(nil) }
+                    .padding(.vertical, 5)
+            }
+            notice("Keep the conversation, files, Git changes, and terminal together in one workspace.")
         }
-        .padding(34)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func agentChoice(_ agent: AgentKind) -> some View {
-        let selected = selectedAgent == agent
-        return Button {
-            selectedAgent = agent
-        } label: {
-            HStack(spacing: 11) {
-                Image(systemName: agent.symbol)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(selected ? Color.white : Theme.accent)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(selected ? Color.white.opacity(0.13)
-                                                       : Theme.accent.opacity(0.09)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.title)
-                        .font(.system(size: 13.5, weight: .semibold))
-                    Text(agent.vendor)
-                        .font(.system(size: 11.5))
-                        .opacity(0.72)
+        let selected = setup.selectedAgent == agent
+        let status = readiness[agent] ?? .checking
+        return Button { setup.selectedAgent = agent } label: {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 9) {
+                    Image(systemName: agent.symbol)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 30, height: 30)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(agent.title).font(.system(size: 13 * scale, weight: .semibold))
+                        Text(agent.vendor).font(.system(size: 11 * scale)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: selected ? "record.circle" : "circle")
+                        .foregroundStyle(selected ? Theme.accent : Color.secondary.opacity(0.4))
+                        .accessibilityHidden(true)
                 }
-                Spacer(minLength: 0)
-                if selected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 15, weight: .semibold))
+                HStack(spacing: 6) {
+                    if status == .connected {
+                        Image(systemName: "checkmark").font(.system(size: 10))
+                    } else {
+                        Circle().frame(width: 5, height: 5)
+                    }
+                    Text(status.label).font(.system(size: 11 * scale))
                 }
+                .foregroundStyle(colour(for: status))
             }
-            .foregroundStyle(selected ? Color.white : Color.primary)
-            .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 58)
-            .surface(selected ? Theme.accentFill : Theme.card, cornerRadius: 11,
-                     border: selected ? .clear : Theme.border)
-            .contentShape(RoundedRectangle(cornerRadius: 11))
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .surface(Theme.card, cornerRadius: 10, border: selected ? Theme.accent : Theme.border)
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Theme.accent : .clear))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .hoverLift()
+        .focused($focused, equals: .agent(agent))
+        .accessibilityLabel("\(agent.title), \(agent.vendor), \(status.label)")
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     private var setupCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(statusColour)
-                    .frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(statusTitle)
-                        .font(.system(size: 14, weight: .semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 13) {
+                Image(systemName: statusIcon)
+                    .font(.system(size: 18))
+                    .foregroundStyle(colour(for: state))
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(colour(for: state).opacity(0.08)))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(statusTitle).font(.system(size: 13 * scale, weight: .semibold))
                     Text(statusDetail)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12 * scale)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 16)
+                Spacer(minLength: 8)
                 setupAction
             }
-
-            if !isInstalled {
+            if state == .notInstalled {
                 HStack(spacing: 9) {
-                    Text(selectedAgent.installHint)
-                        .font(.mono(11.5))
-                        .textSelection(.enabled)
+                    Text(setup.selectedAgent.installHint)
+                        .font(.mono(11.5 * scale)).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
-                    CopyButton("Copy", size: 12) { selectedAgent.installHint }
+                    CopyButton("Copy", size: 12) { setup.selectedAgent.installHint }
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 38)
+                .padding(10)
                 .fieldSurface()
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .surface(Theme.card, cornerRadius: 12, border: statusColour.opacity(0.35))
+        .padding(20)
+        .frame(maxWidth: .infinity, minHeight: 98, alignment: .leading)
+        .surface(Theme.card, cornerRadius: 11,
+                 border: state == .connected ? Theme.addition.opacity(0.35) : Theme.border)
     }
 
     @ViewBuilder private var setupAction: some View {
-        if !isInstalled {
-            ActionButton(title: "Install in terminal", tone: .green, icon: "terminal") {
-                terminalAction = .install(selectedAgent)
+        switch state {
+        case .notInstalled:
+            ActionButton(title: "Install in terminal", tone: .green) {
+                openTerminal(.install(setup.selectedAgent))
             }
-        } else if !isSignedIn {
-            ActionButton(title: "Sign in", tone: .green, icon: "person.crop.circle") {
-                terminalAction = .signIn(selectedAgent)
+            .focused($focused, equals: .terminal)
+        case .signInNeeded:
+            ActionButton(title: "Sign in", tone: .green) {
+                openTerminal(.signIn(setup.selectedAgent))
             }
-        } else {
-            ActionButton(title: "Refresh", tone: .outlined, icon: "arrow.clockwise",
-                         action: refreshAgentState)
-        }
-    }
-
-    private var isInstalled: Bool {
-        switch selectedAgent {
-        case .claudeCode: claude.path != nil
-        case .codex: codex.path != nil
-        case .copilot: copilot.path != nil
-        }
-    }
-
-    private var isSignedIn: Bool {
-        switch selectedAgent {
-        case .claudeCode: claude.account != nil
-        case .codex: codex.account != nil
-        case .copilot: copilot.account != nil
+            .focused($focused, equals: .terminal)
+        case .connected, .failed:
+            VStack(spacing: 8) {
+                ActionButton(title: state == .failed ? "Try again" : "Check again", tone: .outlined,
+                             icon: "arrow.clockwise") { refresh(setup.selectedAgent) }
+                    .focused($focused, equals: .terminal)
+                if state == .failed {
+                    InlineLink(title: "Sign in through CLI") { openTerminal(.signIn(setup.selectedAgent)) }
+                }
+            }
+        case .checking:
+            Text("Checking…").font(.system(size: 11)).foregroundStyle(.secondary)
         }
     }
 
     private var statusTitle: String {
-        if !isInstalled { return "\(selectedAgent.title) is not installed" }
-        if !isSignedIn { return "\(selectedAgent.title) is ready to sign in" }
-        return "\(selectedAgent.title) is connected"
+        let title = setup.selectedAgent.title
+        switch state {
+        case .notInstalled: return "\(title) is not installed"
+        case .signInNeeded: return "Sign in to \(title)"
+        case .checking: return "Checking \(title)…"
+        case .connected: return "\(title) is ready to use"
+        case .failed: return "We could not verify \(title)"
+        }
     }
 
     private var statusDetail: String {
-        if !isInstalled {
-            return "Install the CLI in an embedded terminal, or run the command below yourself."
+        switch state {
+        case .notInstalled: "Install the CLI in an embedded terminal, or run the command yourself."
+        case .signInNeeded: "The CLI is installed. Connect the account you want your sessions to use."
+        case .checking: "Looking for the CLI and checking its account. This can take a moment."
+        case .connected: "Code Station found the CLI and an existing account on this Mac."
+        case .failed: "Try checking again, or sign in through the CLI and return here."
         }
-        if !isSignedIn {
-            return "The CLI is installed. Connect the account you want your sessions to use."
-        }
-        return "Code Station found the CLI and its account. New sessions can use it now."
     }
 
-    private var statusColour: Color {
-        if !isInstalled { return Theme.dotOff }
-        if !isSignedIn { return Theme.attention }
-        return Theme.dotOn
+    private var statusIcon: String {
+        switch state {
+        case .connected: "checkmark"
+        case .checking: "clock"
+        case .failed: "exclamationmark.triangle"
+        case .notInstalled: "terminal"
+        case .signInNeeded: "person.crop.circle"
+        }
+    }
+
+    private func colour(for readiness: AgentReadiness) -> Color {
+        switch readiness {
+        case .connected: Theme.addition
+        case .signInNeeded: Theme.attentionText
+        case .failed: Theme.warningText
+        case .checking, .notInstalled: Color.secondary
+        }
+    }
+
+    private var configurationSetup: some View {
+        @Bindable var loader = setup.loader
+        return VStack(alignment: .leading, spacing: 18) {
+            heading("Do you have team settings?",
+                    detail: "Bring in your team's tools and shortcuts, or start with your own setup.")
+            SettingsCard {
+                OptionRow(title: "Use my own setup", detail: "Add tools and team settings later in Settings.",
+                          selected: !setup.usesTeamSettings) { setup.usesTeamSettings = false }
+                    .disabled(loader.isLoading || setup.appliedConfiguration != nil)
+                    .accessibilityAddTraits(!setup.usesTeamSettings ? [.isSelected] : [])
+                SettingsRowDivider()
+                OptionRow(title: "Load my team's settings",
+                          detail: "Optional. Import from a GitHub repository or a JSON file.",
+                          selected: setup.usesTeamSettings) { setup.usesTeamSettings = true }
+                    .disabled(loader.isLoading)
+                    .accessibilityAddTraits(setup.usesTeamSettings ? [.isSelected] : [])
+            }
+            if setup.usesTeamSettings {
+                SourcePicker(repositoryURL: $loader.repositoryURL,
+                             repositoryTitle: "Load from GitHub",
+                             repositoryDetail: "Use your existing Git access.",
+                             placeholder: "https://github.com/your-team/settings",
+                             fileTitle: "Choose a file", fileDetail: "Choose a settings file on this Mac.",
+                             fileButton: "Choose JSON file", isLoading: loader.isLoading,
+                             loadRepository: loader.loadRepository,
+                             chooseFile: {
+                                 loader.chooseFile(message: "Choose your team's Code Station settings JSON file.")
+                             }, showsOneSource: true)
+                Group {
+                    if let failure = loader.failure {
+                        SourceFailure(failure, lineLimit: nil)
+                    } else if let selection = loader.selection {
+                        SourceLoaded(title: setup.appliedConfiguration == selection
+                                     ? "Team settings applied" : "Team settings loaded",
+                                     detail: "\(selection.sourceName): \(selection.summary)"
+                                     + (setup.appliedConfiguration == selection ? "" : ". Applied when you continue."))
+                    }
+                }
+                .id("import-result")
+                if setup.appliedConfiguration != nil {
+                    notice("Team settings have been applied. You can load another file here or adjust them later in Settings.")
+                }
+            } else {
+                notice("Team settings can include MCP presets, a skills marketplace, API setup, starter requests, and shortcuts. You do not need them to use Code Station.")
+            }
+        }
+    }
+
+    private var projectSetup: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            heading("Open your first project",
+                    detail: "Choose a local folder. Your conversations, files, and changes will stay together here.")
+            if let url = setup.projectURL {
+                let project = Project(url: url)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 13) {
+                        Image(systemName: "folder").font(.system(size: 27)).foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(project.name).font(.system(size: 14 * scale, weight: .semibold))
+                            Text(project.collapsedPath)
+                                .font(.system(size: 11 * scale)).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 8)
+                        InlineLink(title: "Change folder", action: chooseProject)
+                            .focused($focused, equals: .folder)
+                    }
+                    .padding(20)
+                    HStack(spacing: 22) {
+                        Text(project.isGitRepository ? "Git repository" : "Local folder")
+                        if let branch = GitHead.branch(at: project.path) { Text("Branch: \(branch)") }
+                        Text("No changes to your files")
+                    }
+                    .font(.system(size: 11 * scale)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 20).padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading).background(Theme.field)
+                }
+                .cardSurface(cornerRadius: 12)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                HStack(spacing: 20) {
+                    Label(setup.agentWasDeferred ? "Agent setup deferred" : "\(setup.selectedAgent.title) selected",
+                          systemImage: setup.agentWasDeferred ? "clock" : "checkmark")
+                    Label(setup.appliedConfiguration == nil ? "Personal setup" : "Team settings applied",
+                          systemImage: "checkmark")
+                }
+                .font(.system(size: 11 * scale)).foregroundStyle(.secondary)
+                notice("Your project opens next. Create a session when you are ready to ask for your first change.")
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "folder").font(.system(size: 34)).foregroundStyle(Theme.accent)
+                    Text("Start with a folder on this Mac").font(.serif(21 * scale))
+                    Text("Use an existing repository or any project folder.")
+                        .font(.system(size: 12 * scale)).foregroundStyle(.secondary)
+                    ActionButton(title: "Choose project folder", tone: .green, height: 36, action: chooseProject)
+                        .focused($focused, equals: .folder)
+                }
+                .padding(28)
+                .frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.accent.opacity(0.4),
+                                                                 style: StrokeStyle(dash: [5, 4])))
+                Text("You can add more projects and group related repositories into a workspace later.")
+                    .font(.system(size: 11 * scale)).foregroundStyle(.secondary)
+            }
+            if let failure = setup.projectFailure {
+                SourceFailure(failure, lineLimit: nil).id("project-error")
+            }
+        }
+    }
+
+    private func notice(_ text: String) -> some View {
+        Text(text).font(.system(size: 11 * scale)).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
     }
 
     private var footer: some View {
         HStack(spacing: 10) {
-            if step == .configuration && !loader.isLoading {
-                InlineLink(title: "Skip and use defaults") {
-                    loader.clear()
-                    move(to: .agent)
-                }
-            } else if step == .agent && !isSignedIn {
-                InlineLink(title: "Set up later", action: finish)
+            if setup.step == .agent {
+                InlineLink(title: "See how it works", action: showTour)
+                    .focused($focused, equals: .tour)
+            } else if setup.step == .project {
+                InlineLink(title: "Add a project later") { finish(false) }
             }
             Spacer(minLength: 12)
-            if step != .welcome {
-                ActionButton(title: "Back", tone: .outlined) {
-                    move(to: Step(rawValue: step.rawValue - 1) ?? .welcome)
+            if setup.step == .agent {
+                if state != .connected {
+                    InlineLink(title: "Set up later") {
+                        setup.continueFromAgent(readiness: state, deferSetup: true)
+                    }
                 }
-            }
-            if step == .agent {
-                ActionButton(title: "Start using Code Station", tone: .green, action: finish)
-                    .disabled(!isSignedIn)
-            } else if step == .configuration {
-                ActionButton(title: "Continue", tone: .green) { move(to: .agent) }
-                    .disabled(loader.selection == nil || loader.isLoading)
+                ActionButton(title: "Continue with \(setup.selectedAgent.title)", tone: .green, height: 36) {
+                    setup.continueFromAgent(readiness: state)
+                }
+                .disabled(state != .connected)
+                .focused($focused, equals: .primary)
             } else {
-                ActionButton(title: "Continue", tone: .green) {
-                    move(to: Step(rawValue: step.rawValue + 1) ?? .agent)
+                ActionButton(title: "Back", tone: .outlined, height: 36) {
+                    setup.step = setup.step == .project ? .configuration : .agent
+                }
+                .disabled(setup.loader.isLoading)
+                if setup.step == .configuration {
+                    ActionButton(title: "Continue", tone: .green, height: 36) {
+                        setup.continueFromConfiguration(didInstall: applyConfiguration)
+                    }
+                    .disabled(!setup.canContinueConfiguration)
+                    .focused($focused, equals: .primary)
+                } else {
+                    ActionButton(title: "Open project", tone: .green, height: 36) { finish(true) }
+                        .disabled(setup.projectURL == nil)
+                        .focused($focused, equals: .primary)
                 }
             }
         }
-        .padding(.horizontal, 24)
-        .frame(height: 58)
+        .padding(.horizontal, 26)
+        .padding(.vertical, 15)
         .background(Theme.card)
         .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
-    private func move(to next: Step) {
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-            step = next
-        }
+    private func chooseProject() {
+        guard let url = FilePicker.chooseFolder(prompt: "Choose project",
+                                               message: "Choose a local project folder.",
+                                               directory: setup.projectURL) else { return }
+        setup.projectURL = url.standardizedFileURL
+        setup.projectFailure = nil
+        focused = .folder
+        announce("Project selected: \(url.lastPathComponent)")
     }
 
-    private func refreshAgentState() {
-        runner.refreshAvailableAgents()
-        claude.refresh()
-        codex.refresh()
-        copilot.refresh()
+    private func showTour() {
+        dialogs.show(FirstRunTour.dialog(closeTitle: "Back to setup") { focused = .tour })
     }
 
-    private func finish() {
-        if let selection = loader.selection {
-            do {
-                try SiteConfigurationImporter.install(selection)
-            } catch {
-                loader.failure = error.localizedDescription
-                move(to: .configuration)
-                return
-            }
-            // Stores already read bundled defaults during startup. They only need another
-            // application pass when this wizard installed a different file.
-            onSiteConfigurationLoaded()
-        }
-        runner.refreshAvailableAgents()
-        if runner.isAvailable(selectedAgent) {
-            runner.agent = selectedAgent
-        }
-        onFinish()
+    private func announce(_ text: String) {
+        AccessibilityNotification.Announcement(text).post()
     }
 }

@@ -231,6 +231,7 @@ struct RootView: View {
                 settings.completeOnboarding()
                 self.sheet = nil
             }
+            .environment(\.textScale, settings.textSize.scale)
         }
     }
 
