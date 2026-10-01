@@ -10,7 +10,6 @@ struct DayRibbonSection: View {
     // card claims an empty day for the moment between opening Home and the first scan
     // landing, which is the one moment the claim is most likely to be wrong.
     let scanned: Bool
-    var selectedSessionID: UUID? = nil
     let onOpen: (UUID) -> Void
 
     // The project the pointer picked out of the legend, which is how the same colour is
@@ -82,7 +81,6 @@ struct DayRibbonSection: View {
                                     width: geometry.size.width,
                                     height: Self.laneHeight,
                                     dimmed: dimmed(block.subject.name),
-                                    selected: selectedSessionID == block.sessionID,
                                     open: { onOpen(block.sessionID) })
                             .padding(.top, CGFloat(lane) * 20)
                     }
@@ -101,8 +99,7 @@ struct DayRibbonSection: View {
                         Text("\(block.start.formatted(date: .abbreviated, time: .shortened)), \(block.subject.name), \(block.title), \(DayRibbon.duration(block.seconds))")
                     }
                     .buttonStyle(.plain)
-                    .accessibilityHint("Shows this session in the inspector")
-                    .accessibilityAddTraits(selectedSessionID == block.sessionID ? .isSelected : [])
+                    .accessibilityHint("Opens this session")
                 }
             }
         }
@@ -165,7 +162,6 @@ private struct RibbonBlock: View {
     let width: CGFloat
     let height: CGFloat
     let dimmed: Bool
-    let selected: Bool
     let open: () -> Void
 
     // Below this a run disappears from the band entirely. Two neighbours can merge
@@ -189,8 +185,6 @@ private struct RibbonBlock: View {
                 .fill(block.subject.tint.colour)
                 .frame(width: span, height: height)
                 .brightness(hovering && !dimmed ? 0.06 : 0)
-                .overlay(RoundedRectangle(cornerRadius: 3)
-                    .stroke(selected ? Theme.accent : .clear, lineWidth: 2))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

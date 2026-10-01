@@ -69,15 +69,6 @@ struct HomeWorkMap {
             }
     }
 
-    func selection(_ id: UUID?, needsYouOnly: Bool) -> HomeLive? {
-        if let selected = sessions.first(where: { $0.id == id }),
-           !needsYouOnly || selected.needsAttention { return selected }
-        if let waiting = waiting.sorted(by: Self.comesFirst).first { return waiting }
-        guard !needsYouOnly else { return nil }
-        return active.sorted(by: Self.comesFirst).first
-            ?? sessions.sorted(by: Self.comesFirst).first
-    }
-
     private static func comesFirst(_ first: HomeLive, _ second: HomeLive) -> Bool {
         if (first.permission != nil) != (second.permission != nil) { return first.permission != nil }
         if first.needsAttention != second.needsAttention { return first.needsAttention }
@@ -90,10 +81,9 @@ struct HomeWorkMap {
 
 struct HomeWorkMapView: View {
     let map: HomeWorkMap
-    let selectedID: UUID?
     @Binding var needsYouOnly: Bool
     let compact: Bool
-    let select: (UUID) -> Void
+    let open: (HomeLive) -> Void
 
     private var spatial: Bool {
         !compact && !map.groups.isEmpty && map.groups.count <= 4
@@ -253,8 +243,7 @@ struct HomeWorkMapView: View {
             .padding(12)
             ForEach(group.sessions) { live in
                 Rectangle().fill(Theme.hairline).frame(height: 1)
-                HomeMapSessionRow(live: live, selected: selectedID == live.id,
-                                  dimmed: needsYouOnly && !live.needsAttention) { select(live.id) }
+                HomeMapSessionRow(live: live, dimmed: needsYouOnly && !live.needsAttention) { open(live) }
             }
         }
         .cardSurface(cornerRadius: 12)
@@ -286,14 +275,13 @@ private struct MapAnchors: PreferenceKey {
 
 private struct HomeMapSessionRow: View {
     let live: HomeLive
-    let selected: Bool
     let dimmed: Bool
-    let select: () -> Void
+    let open: () -> Void
     @State private var hovering = false
     @FocusState private var focused: Bool
 
     var body: some View {
-        Button(action: select) {
+        Button(action: open) {
             HStack(spacing: 9) {
                 StateLight(tone: live.tone)
                 VStack(alignment: .leading, spacing: 5) {
@@ -301,7 +289,7 @@ private struct HomeMapSessionRow: View {
                         .font(.system(size: 12, weight: .semibold)).lineLimit(2)
                     Text("\(live.status) · \(live.session.agent.title)")
                         .font(.system(size: 10.5))
-                        .foregroundStyle(selected ? live.tone.colour : .secondary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -309,10 +297,7 @@ private struct HomeMapSessionRow: View {
             }
             .multilineTextAlignment(.leading)
             .padding(12)
-            .background(selected ? live.tone.colour.opacity(0.1) : hovering ? Theme.field : .clear)
-            .overlay(alignment: .leading) {
-                if selected { Rectangle().fill(live.tone.colour).frame(width: 3) }
-            }
+            .background(hovering ? Theme.field : .clear)
             .overlay { if focused { Rectangle().stroke(Theme.accent, lineWidth: 2) } }
             .contentShape(Rectangle())
         }
@@ -321,7 +306,6 @@ private struct HomeMapSessionRow: View {
         .onHover { hovering = $0 }
         .opacity(dimmed ? 0.4 : 1)
         .accessibilityLabel("\(live.session.title), \(live.status), \(live.containerName)")
-        .accessibilityHint("Shows this session in the inspector")
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint("Opens this session")
     }
 }

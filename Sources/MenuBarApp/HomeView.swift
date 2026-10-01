@@ -15,7 +15,6 @@ struct HomeView: View {
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(GlobalCommandPaletteController.self) private var commandPalette
     @FocusState private var tourFocused: Bool
-    @State private var selectedSessionID: UUID?
     @State private var needsYouOnly = false
 
     // Recomputed once per redraw and handed down, because every section below counts over
@@ -83,27 +82,20 @@ struct HomeView: View {
 
     private func status(_ standing: Standing) -> some View {
         let map = HomeWorkMap(sessions: standing.sessions)
-        let selected = map.selection(selectedSessionID, needsYouOnly: needsYouOnly)
         return GeometryReader { geometry in
-            ScrollViewReader { scroll in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        hero(map)
-                        overview(map, selected: selected, width: geometry.size.width - 48)
-                            .id("work-map")
-                        timeSpent(standing) { id in
-                            select(id)
-                            scroll.scrollTo("work-map", anchor: .top)
-                        }
-                        dailyTotals(standing)
-                        resume(standing, select: { id in
-                            select(id)
-                            scroll.scrollTo("work-map", anchor: .top)
-                        })
-                        if !oldSessions.isEmpty { cleanup() }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    hero(map)
+                    HomeWorkMapView(map: map, needsYouOnly: $needsYouOnly,
+                                    compact: geometry.size.width - 48 < 650) { live in
+                        open(live)
                     }
-                    .padding(24)
+                    timeSpent(standing)
+                    dailyTotals(standing)
+                    resume(standing)
+                    if !oldSessions.isEmpty { cleanup() }
                 }
+                .padding(24)
             }
         }
     }
@@ -146,54 +138,9 @@ struct HomeView: View {
             }
     }
 
-    private func overview(_ map: HomeWorkMap, selected: HomeLive?, width: CGFloat) -> some View {
-        let wide = width >= 1000
-        let layout = wide ? AnyLayout(HStackLayout(alignment: .top, spacing: 18))
-                          : AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
-        return layout {
-            HomeWorkMapView(map: map, selectedID: selected?.id, needsYouOnly: $needsYouOnly,
-                            compact: wide ? width - 338 < 650 : width < 650) { id in
-                selectedSessionID = id
-                if !map.waiting.contains(where: { $0.id == id }) { needsYouOnly = false }
-            }
-            VStack(spacing: 14) {
-                if let selected {
-                    inspector(selected)
-                } else {
-                    PaneMessage(icon: "checkmark.circle", title: "You're all caught up",
-                                detail: "Select a session to see its recap and next action.")
-                        .cardSurface(cornerRadius: 14)
-                }
-                HomeAccountUsage()
-            }
-            .frame(width: wide ? 320 : nil)
-            .frame(maxWidth: wide ? nil : .infinity)
-        }
-    }
-
-    private func inspector(_ live: HomeLive) -> some View {
-        let target = recapTarget(for: live.session)
-        let roots = Array(Set(store.workingDirectories(for: live.session))).sorted()
-        let inspected = roots.allSatisfy(workingTrees.hasInspected)
-        return HomeSessionInspector(
-            live: live, hasChanges: hasChanges(in: live.session),
-            changedFiles: inspected ? roots.reduce(0) { $0 + workingTrees.uncommittedFileCount(at: $1) } : nil,
-            recap: store.recap(for: target), recapping: runner.isRecapping(target),
-            canRecap: runner.canRecap(target, store: store),
-            offersManualRecap: !appSettings.sessionRecapsEnabled,
-            onRecap: { _ = runner.recap(target, store: store) },
-            onOpen: { store.selectSession(live.id, destination: $0) })
-            .task(id: roots) {
-                while !Task.isCancelled {
-                    workingTrees.refresh(roots)
-                    try? await Task.sleep(for: WorkingTreeWatch.interval)
-                }
-            }
-    }
-
-    private func select(_ id: UUID) {
-        selectedSessionID = id
-        needsYouOnly = false
+    private func open(_ live: HomeLive) {
+        let destination = live.primaryAction(hasChanges: hasChanges(in: live.session)).destination
+        store.selectSession(live.id, destination: destination)
     }
 
     private func dailyTotals(_ standing: Standing) -> some View {
@@ -232,14 +179,15 @@ struct HomeView: View {
 
     // MARK: - Where the day went
 
-    private func timeSpent(_ standing: Standing, select: @escaping (UUID) -> Void) -> some View {
+    private func timeSpent(_ standing: Standing) -> some View {
         DayRibbonSection(
             ribbon: DayRibbon.build(standing.timeline,
                                     spans: sessionTimes.spans(for:),
                                     now: Date()),
             scanned: scanned(standing),
-            selectedSessionID: selectedSessionID,
-            onOpen: select)
+            onOpen: { id in
+                if let live = standing.sessions.first(where: { $0.id == id }) { open(live) }
+            })
             .task(id: standing.timeRequests) {
                 sessionTimes.refresh(standing.timeRequests)
             }
@@ -253,12 +201,7 @@ struct HomeView: View {
         return roots.contains(where: workingTrees.isDirty)
     }
 
-    private func recapTarget(for session: ChatSession) -> UUID {
-        guard !session.isImplementingDesign else { return session.id }
-        return store.designConversation(for: session.id)?.id ?? session.id
-    }
-
-    private func resume(_ standing: Standing, select: @escaping (UUID) -> Void) -> some View {
+    private func resume(_ standing: Standing) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Still on your mind?").font(.serif(20))
@@ -269,14 +212,14 @@ struct HomeView: View {
                         [.searchable(standing.sessions.map { live in
                             MenuItem(label: live.session.title, projectTint: live.tint,
                                      badge: live.status, subtitle: live.containerName,
-                                     handler: { select(live.id) })
+                                     handler: { open(live) })
                         }, prompt: "Find a session", noResults: "No sessions match your search.")]
                     }
             }
             if !standing.resumable.isEmpty {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
                     ForEach(standing.resumable.prefix(6)) { live in
-                        ResumeCard(live: live, selected: selectedSessionID == live.id) { select(live.id) }
+                        ResumeCard(live: live) { open(live) }
                     }
                 }
             } else {
@@ -438,39 +381,8 @@ struct HomeView: View {
     }
 }
 
-struct HomeRecap: View {
-    let recap: SessionRecap
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(Theme.attentionText)
-                .padding(.top, 1)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("SESSION RECAP")
-                    .font(.mono(9, .semibold))
-                    .kerning(0.8)
-                    .foregroundStyle(Theme.attentionText)
-                Text(recap.text)
-                    .font(.system(size: 12.5))
-                    .lineSpacing(1)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .surface(Theme.attention.opacity(0.07), cornerRadius: 8,
-                 border: Theme.attention.opacity(0.32))
-    }
-}
-
 private struct ResumeCard: View {
     let live: HomeLive
-    let selected: Bool
     let onOpen: () -> Void
 
     @State private var hovering = false
@@ -510,12 +422,11 @@ private struct ResumeCard: View {
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 11)
-                .fill(selected ? Theme.accent.opacity(0.08) : hovering ? Theme.field : Theme.sunken))
+                .fill(hovering ? Theme.field : Theme.sunken))
             .contentShape(RoundedRectangle(cornerRadius: 11))
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Shows this session in the inspector")
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint("Opens this session")
         .hoverLift(hovering)
         .onHover { hovering = $0 }
     }

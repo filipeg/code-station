@@ -47,28 +47,6 @@ struct HomeWorkMapTests {
         #expect(map.active.count == 3)
     }
 
-    @Test func startsWithPermissionAndPreservesAnExplicitSelection() {
-        let request = live(tone: .needsYou, permission: permission)
-        let review = live(tone: .needsYou, finished: true)
-        let running = live()
-        let map = HomeWorkMap(sessions: [running, review, request])
-
-        #expect(map.selection(nil, needsYouOnly: false)?.id == request.id)
-        #expect(map.selection(running.id, needsYouOnly: false)?.id == running.id)
-        #expect(map.selection(running.id, needsYouOnly: true)?.id == request.id)
-        #expect(map.selection(review.id, needsYouOnly: true)?.id == review.id)
-    }
-
-    @Test func selectionRecoversAfterDeletionOrAttentionClears() {
-        let running = live()
-        let idle = live(tone: .idle)
-        let map = HomeWorkMap(sessions: [running, idle])
-        #expect(map.selection(UUID(), needsYouOnly: false)?.id == running.id)
-        #expect(map.selection(idle.id, needsYouOnly: false)?.id == idle.id)
-        #expect(map.selection(running.id, needsYouOnly: true) == nil)
-        #expect(HomeWorkMap(sessions: []).selection(nil, needsYouOnly: false) == nil)
-    }
-
     @Test func routesReviewToChangesOnlyWhenThereAreChanges() {
         let review = live(tone: .needsYou, finished: true)
         #expect(review.primaryAction(hasChanges: true).destination == .changes)
