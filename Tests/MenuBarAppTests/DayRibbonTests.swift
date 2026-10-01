@@ -240,27 +240,5 @@ struct DayRibbonTests {
         #expect(ribbon.isEmpty)
         #expect(ribbon.spent == 0)
         #expect(ribbon.blocks.isEmpty)
-        #expect(ribbon.lanes.isEmpty)
-    }
-
-    @Test func stacksParallelSessionsAndReusesLanesWithoutFillingGaps() {
-        let first = session(project: "Project")
-        let parallel = session(project: "Project")
-        let later = session(project: "Project")
-        let other = session(project: "Other")
-        let spans = [first.id: [TimeSpan(start: at(9), end: at(10))],
-                     parallel.id: [TimeSpan(start: at(9, 30), end: at(10, 30))],
-                     later.id: [TimeSpan(start: at(12), end: at(13))],
-                     other.id: [TimeSpan(start: at(9), end: at(10))]]
-        let ribbon = DayRibbon.build([first, parallel, later, other],
-                                    spans: { spans[$0] ?? [] }, now: at(18))
-
-        #expect(ribbon.lanes.count == 3)
-        #expect(ribbon.lanes[0].map(\.sessionID) == [first.id, later.id])
-        #expect(ribbon.lanes[0][0].end == at(10))
-        #expect(ribbon.lanes[0][1].start == at(12))
-        #expect(ribbon.lanes[1].map(\.sessionID) == [parallel.id])
-        #expect(ribbon.lanes[2].map(\.sessionID) == [other.id])
-        #expect(ribbon.spent == 4 * 3_600)
     }
 }

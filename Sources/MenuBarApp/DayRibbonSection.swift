@@ -16,8 +16,7 @@ struct DayRibbonSection: View {
     // proved to mean the same project everywhere on the page. Nil means show everything.
     @State private var focused: String?
 
-    private static let laneHeight: CGFloat = 16
-    private var bandHeight: CGFloat { max(30, CGFloat(ribbon.lanes.count) * 20 - 4) }
+    private static let bandHeight: CGFloat = 30
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -70,26 +69,24 @@ struct DayRibbonSection: View {
     }
 
     private var track: some View {
-        let lanes = ribbon.lanes
-        return GeometryReader { geometry in
+        GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 dayBreak(width: geometry.size.width)
-                ForEach(lanes.indices, id: \.self) { lane in
-                    ForEach(lanes[lane]) { block in
-                        RibbonBlock(block: block,
-                                    axis: ribbon.axis,
-                                    width: geometry.size.width,
-                                    height: Self.laneHeight,
-                                    dimmed: dimmed(block.subject.name),
-                                    open: { onOpen(block.sessionID) })
-                            .padding(.top, CGFloat(lane) * 20)
-                    }
+                ForEach(ribbon.blocks) { block in
+                    RibbonBlock(block: block,
+                                axis: ribbon.axis,
+                                width: geometry.size.width,
+                                height: Self.bandHeight,
+                                dimmed: dimmed(block.subject.name),
+                                open: { onOpen(block.sessionID) })
                 }
             }
-            .frame(width: geometry.size.width, height: bandHeight, alignment: .topLeading)
+            .frame(width: geometry.size.width, height: Self.bandHeight,
+                   alignment: .topLeading)
         }
-        .frame(height: bandHeight)
+        .frame(height: Self.bandHeight)
         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.sunken))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityRepresentation {
             VStack {
                 ForEach(ribbon.blocks) { block in
@@ -104,6 +101,7 @@ struct DayRibbonSection: View {
             }
         }
     }
+
     // Midnight inside a rolling 24 hours, so the half of the band that belongs to
     // yesterday is not read as part of today.
     @ViewBuilder private func dayBreak(width: CGFloat) -> some View {
@@ -112,7 +110,7 @@ struct DayRibbonSection: View {
             let scale = width / max(ribbon.axis.duration, 1)
             Rectangle()
                 .fill(Theme.chartGrid)
-                .frame(width: 1, height: bandHeight)
+                .frame(width: 1, height: Self.bandHeight)
                 .offset(x: midnight.timeIntervalSince(ribbon.axis.start) * scale)
         }
     }
@@ -194,7 +192,7 @@ private struct RibbonBlock: View {
         .motion(Motion.reveal, value: dimmed)
         .appTooltip(delay: .milliseconds(120)) { tooltip }
         .accessibilityLabel(spoken)
-        .accessibilityHint("Shows this session in the inspector")
+        .accessibilityHint("Opens this session")
         // Placed by layout rather than by an offset: an offset only moves the drawing,
         // so the hint would be anchored to where the block would sit without it.
         .padding(.leading, offset)

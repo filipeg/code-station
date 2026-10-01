@@ -61,22 +61,6 @@ struct DayRibbon {
 
     var isEmpty: Bool { legend.isEmpty }
 
-    // Parallel sessions retain their own row. Reusing a row after its last span ends
-    // leaves the gaps intact without making a busy project taller than it needs to be.
-    var lanes: [[Block]] {
-        legend.flatMap { total -> [[Block]] in
-            var lanes: [[Block]] = []
-            for block in blocks.filter({ $0.subject.id == total.id }) {
-                if let index = lanes.firstIndex(where: { $0.last!.end <= block.start }) {
-                    lanes[index].append(block)
-                } else {
-                    lanes.append([block])
-                }
-            }
-            return lanes
-        }
-    }
-
     static let window: TimeInterval = 24 * 3_600
 
     static func axis(endingAt now: Date) -> DateInterval {
