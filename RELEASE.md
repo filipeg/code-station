@@ -19,7 +19,9 @@ To hand a build to a few people without waiting on Apple, build the DMG on your 
 ./Scripts/release.sh --skip-notarization 1.2.0
 ```
 
-This needs the Developer ID certificate in your keychain, but no App Store Connect API key. The app and DMG are still signed, so macOS keeps the permissions people gave earlier builds. Gatekeeper blocks the first launch, though. Each person has to try to open the app once, then click **Open Anyway** in **System Settings > Privacy & Security**.
+This needs no App Store Connect API key. Gatekeeper blocks the first launch, so each person has to try to open the app once, then click **Open Anyway** in **System Settings > Privacy & Security**.
+
+The Developer ID certificate is optional. If it is in your keychain, the app and DMG are signed with it, and macOS treats each build as the same app. If it is not, the app gets an ad-hoc signature instead. That works too, but macOS sees every build as a new app, so people are asked again for Keychain access and other permissions after each one.
 
 Do not attach a quick build to a GitHub Release. Releases are always notarized.
 
