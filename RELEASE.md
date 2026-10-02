@@ -11,6 +11,18 @@ The `Release` GitHub Actions workflow then builds, signs, and notarizes the app.
 
 Review the draft in GitHub Releases, then publish it. If the workflow fails for a temporary reason, run it again from GitHub Actions and select the same tag.
 
+## Quick builds
+
+To hand a build to a few people without waiting on Apple, build the DMG on your own Mac and skip notarization:
+
+```bash
+./Scripts/release.sh --skip-notarization 1.2.0
+```
+
+This needs the Developer ID certificate in your keychain, but no App Store Connect API key. The app and DMG are still signed, so macOS keeps the permissions people gave earlier builds. Gatekeeper blocks the first launch, though. Each person has to try to open the app once, then click **Open Anyway** in **System Settings > Privacy & Security**.
+
+Do not attach a quick build to a GitHub Release. Releases are always notarized.
+
 ## What the app expects of a release
 
 Installed copies check this repository's latest release every five days and offer to install it. For that to work the release has to carry both assets the workflow attaches: one `.dmg`, and the `.sha256` beside it named exactly `<the dmg>.sha256`. A release without them still shows up in the app, but only as a link to the page.
