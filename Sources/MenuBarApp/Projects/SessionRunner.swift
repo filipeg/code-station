@@ -1395,6 +1395,11 @@ final class SessionRunner {
         directory. Build the actual visible design, not a Markdown design brief or a prose \
         description of one. Make useful interactions work in the canvas.
 
+        The app already provides the design prompt composer outside the canvas. Keep it \
+        as the only place to submit design requests. Do not add a second design prompt \
+        form or a simulated agent chat to the generated page. Controls that belong to \
+        the product being designed should still work as part of its prototype.
+
         When the result is mainly artwork, such as a comic, illustration, poster, mascot, \
         or photo-like scene, and you have an image generation tool, draw the artwork with \
         that tool instead of building it from CSS or SVG shapes. Save it as a PNG in an \

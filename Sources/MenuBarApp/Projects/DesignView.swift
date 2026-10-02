@@ -42,35 +42,31 @@ struct DesignView: View {
             let turns = DesignTurns.build(messages: session.messages,
                                           revisions: session.designRevisions)
             GeometryReader { geometry in
-                if isEmpty(session) {
-                    firstPrompt(session)
-                } else {
-                    let width = versionsCollapsed
-                        ? DesignSplitLayout.collapsedWidth
-                        : DesignSplitLayout.conversationWidth(
-                            conversationWidth, availableWidth: geometry.size.width)
+                let width = versionsCollapsed
+                    ? DesignSplitLayout.collapsedWidth
+                    : DesignSplitLayout.conversationWidth(
+                        conversationWidth, availableWidth: geometry.size.width)
 
-                    ZStack(alignment: .leading) {
-                        HStack(spacing: 0) {
-                            Group {
-                                if versionsCollapsed {
-                                    versionsRail(session)
-                                } else {
-                                    versionsColumn(session, turns: turns, width: width)
-                                }
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 0) {
+                        Group {
+                            if versionsCollapsed {
+                                versionsRail(session)
+                            } else {
+                                versionsColumn(session, turns: turns, width: width)
                             }
-                            .frame(width: width)
-                            .clipped()
-                            Divider().overlay(Theme.hairline)
-                            canvasColumn(session, directory: displayedDirectory,
-                                         liveDirectory: liveDirectory)
                         }
+                        .frame(width: width)
+                        .clipped()
+                        Divider().overlay(Theme.hairline)
+                        canvasColumn(session, directory: displayedDirectory,
+                                     liveDirectory: liveDirectory)
+                    }
 
-                        if !versionsCollapsed {
-                            splitHandle(conversationWidth: width,
-                                        availableWidth: geometry.size.width)
-                                .offset(x: width - DesignSplitLayout.handleWidth / 2)
-                        }
+                    if !versionsCollapsed {
+                        splitHandle(conversationWidth: width,
+                                    availableWidth: geometry.size.width)
+                            .offset(x: width - DesignSplitLayout.handleWidth / 2)
                     }
                 }
             }
@@ -105,13 +101,6 @@ struct DesignView: View {
         }
     }
 
-    // Only one place asks for the first prompt, so the pane shows nothing else until it
-    // is answered.
-    private func isEmpty(_ session: ChatSession) -> Bool {
-        session.messages.isEmpty && session.designRevisions.isEmpty
-            && canvas.revision == nil && !store.isTranscriptLoading(sessionID)
-    }
-
     private func displayedDirectory(for session: ChatSession, live: URL) -> URL {
         guard let displayedRevision = displayedRevision(in: session) else { return live }
         return DesignArtifacts.materialsDirectory(displayedRevision, designDirectory: live)
@@ -136,30 +125,6 @@ struct DesignView: View {
 
     private var latestPromptID: UUID? {
         store.session(sessionID)?.messages.last(where: { $0.role == .user })?.id
-    }
-
-    // MARK: - First prompt
-
-    private func firstPrompt(_ session: ChatSession) -> some View {
-        VStack(spacing: 14) {
-            VStack(spacing: 6) {
-                Text("What should we design?")
-                    .font(.serif(22))
-                Text("Describe a screen, flow, prototype, deck, diagram, or visual. "
-                     + "Each prompt becomes a version you can go back to.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            designComposer(session)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
-        }
-        .frame(maxWidth: 560)
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.background)
     }
 
     // MARK: - Versions
@@ -750,8 +715,10 @@ struct DesignView: View {
                 .background(Theme.sunken)
         } else {
             PaneMessage(icon: "rectangle.on.rectangle.angled",
-                        title: "No design yet",
-                        detail: "Describe what to design in the box below.")
+                        title: "Your design appears here",
+                        detail: versionsCollapsed
+                            ? "Describe what to design in the prompt below."
+                            : "Describe what to design in the prompt at the bottom of the Versions panel.")
                 .background(Theme.sunken)
         }
     }
