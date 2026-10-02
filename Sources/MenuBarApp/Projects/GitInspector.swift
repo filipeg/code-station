@@ -45,6 +45,13 @@ struct GitChange: Identifiable, Sendable, Equatable {
     var fileName: String { (path as NSString).lastPathComponent }
 }
 
+struct RemoteBranch: Sendable, Equatable, Hashable {
+    var remote: String
+    var name: String
+
+    var ref: String { "\(remote)/\(name)" }
+}
+
 enum GitRepoState: Sendable, Equatable {
     case ready
     case notARepo
@@ -63,6 +70,9 @@ struct GitSnapshot: Sendable, Equatable {
     var onBranch: Bool = false
     // Local branches, most recently committed first, for the branch switcher.
     var branches: [String] = []
+    // Branches that exist on a remote with no local branch of the same name yet, such as
+    // one pushed by someone else or by an agent working in another clone.
+    var remoteBranches: [RemoteBranch] = []
     // The remote branch this one tracks, and how the two have drifted apart.
     var upstream: String?
     var ahead: Int = 0
@@ -254,6 +264,25 @@ enum GitInspector {
                        timeout: commandTimeout)
         if refs.ok {
             snapshot.branches = refs.text.split(separator: "\n").map(String.init)
+        }
+
+        // lstrip=2 leaves "origin/feature" and lstrip=3 leaves "feature", so the remote is
+        // what the first has before the second. The symref column marks origin/HEAD, which
+        // only points at another branch.
+        let remoteRefs = run(tool, ["for-each-ref", "refs/remotes",
+                                    "--format=%(refname:lstrip=2)\t%(refname:lstrip=3)\t%(symref)",
+                                    "--sort=-committerdate"], in: url,
+                             timeout: commandTimeout)
+        if remoteRefs.ok {
+            let local = Set(snapshot.branches)
+            snapshot.remoteBranches = remoteRefs.text.split(separator: "\n").compactMap { line in
+                let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+                guard fields.count == 3, fields[2].isEmpty, !fields[1].isEmpty else { return nil }
+                let name = String(fields[1])
+                guard !local.contains(name) else { return nil }
+                let remote = String(fields[0].dropLast(name.count + 1))
+                return RemoteBranch(remote: remote, name: name)
+            }
         }
 
         if snapshot.hasCommits {

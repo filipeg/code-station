@@ -256,7 +256,7 @@ struct ChangesView: View {
             },
             .separator
         ]
-        let items = snapshot.branches.map { branch in
+        let local = snapshot.branches.map { branch in
             let current = snapshot.onBranch && branch == snapshot.branch
             return MenuItem(label: branch, checked: current, handler: {
                 guard !current else { return }
@@ -265,6 +265,14 @@ struct ChangesView: View {
                 }
             })
         }
+        let remote = snapshot.remoteBranches.map { branch in
+            MenuItem(label: branch.name, detail: branch.remote, handler: {
+                perform("Checking out \(branch.ref)…", failure: "Could not check out branch") {
+                    await GitActions.checkoutRemoteBranch(branch, at: repoRoot)
+                }
+            })
+        }
+        let items = local + remote
         // A handful of branches read faster as plain rows than behind a field to type in.
         if items.count > 6 {
             entries.append(.searchable(items,
