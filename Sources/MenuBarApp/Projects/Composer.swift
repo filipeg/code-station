@@ -57,6 +57,7 @@ struct Composer<Above: View, Accessory: View>: View {
         let state = runner.state(sessionID)
         let busy = state.isBusy
         let canSend = !blocked && !runner.draft(sessionID).isEmpty
+        let roots = store.session(sessionID).map(store.workingDirectories(for:)) ?? []
 
         let matches = matches
 
@@ -86,6 +87,7 @@ struct Composer<Above: View, Accessory: View>: View {
                               onRecallUp: onRecallUp,
                               onRecallDown: onRecallDown,
                               highlightsKeyword: agent == .claudeCode,
+                              commandNames: Set(commands.map { $0.name.lowercased() }),
                               onSuggestionKey: onSuggestionKey,
                               onCommandKey: commandKey) {
                     accessory
@@ -144,15 +146,15 @@ struct Composer<Above: View, Accessory: View>: View {
         .overlay(RoundedRectangle(cornerRadius: 10)
             .stroke(Theme.accent, lineWidth: dropTargeted ? 2 : 0)
             .padding(6))
-        // Read again each time the menu opens rather than once: a command is a file
-        // someone can add, edit or delete between one prompt and the next.
-        .task(id: query == nil) {
-            guard query != nil else { return }
-            let roots = store.session(sessionID).map(store.workingDirectories(for:)) ?? []
+        // Saved drafts need the command names too. Refresh as the menu opens or closes,
+        // since command files can change between prompts.
+        .task(id: [agent.rawValue, String(query == nil)] + roots) {
             let agent = agent
-            commands = await Task.detached {
+            let loaded = await Task.detached {
                 AgentCommands.all(for: agent, workingDirectories: roots)
             }.value
+            guard !Task.isCancelled else { return }
+            commands = loaded
         }
         .onChange(of: query) { _, typed in
             commandSelection = 0

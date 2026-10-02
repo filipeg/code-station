@@ -34,7 +34,7 @@ struct ComposerKeywordTests {
             window.contentView?.addSubview(scrollView)
             view.highlightsKeyword = highlights
             view.animatesKeyword = animates
-            view.refreshKeyword()
+            view.refreshHighlights()
         }
 
         func colour(at index: Int) -> NSColor? {
