@@ -122,12 +122,6 @@ struct HomeWorkMapView: View {
                 }
                 .frame(height: 320)
             }
-            if !map.active.isEmpty {
-                ViewThatFits(in: .horizontal) {
-                    HStack { legend; Spacer(); caption }
-                    VStack(alignment: .leading, spacing: 8) { legend; caption }
-                }
-            }
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -241,19 +235,6 @@ struct HomeWorkMapView: View {
         .cardSurface(cornerRadius: 12)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(group.identity.containerName)
-    }
-
-    private var legend: some View {
-        HStack(spacing: 12) {
-            Label { Text("Working") } icon: { StateLight(tone: .running) }
-            Label { Text("Needs you") } icon: { StateLight(tone: .needsYou) }
-        }
-        .font(.system(size: 10.5)).foregroundStyle(.secondary)
-    }
-
-    private var caption: some View {
-        Text("Grouped by project or workspace")
-            .font(.system(size: 10.5)).foregroundStyle(.secondary)
     }
 }
 
