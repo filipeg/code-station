@@ -60,15 +60,32 @@ enum MenuEntry {
     static func searchable(_ items: [MenuItem],
                            prompt: String,
                            noResults: String) -> MenuEntry {
-        .searchable(SearchableMenuItems(items: items, prompt: prompt,
+        .searchable(SearchableMenuItems(groups: [MenuItemGroup(title: nil, items: items)],
+                                        prompt: prompt, noResults: noResults))
+    }
+
+    static func searchable(groups: [MenuItemGroup],
+                           prompt: String,
+                           noResults: String) -> MenuEntry {
+        .searchable(SearchableMenuItems(groups: groups, prompt: prompt,
                                         noResults: noResults))
     }
 }
 
 struct SearchableMenuItems {
-    let items: [MenuItem]
+    let groups: [MenuItemGroup]
     let prompt: String
     let noResults: String
+
+    var items: [MenuItem] { groups.flatMap(\.items) }
+}
+
+// A titled run of rows that folds away under its heading, for menus that hold a long
+// list of two different kinds of thing. A group with no title is shown as plain rows.
+struct MenuItemGroup {
+    let title: String?
+    let items: [MenuItem]
+    var startsExpanded = true
 }
 
 struct MenuCardItem {
@@ -496,8 +513,15 @@ private struct MenuContentHeightKey: PreferenceKey {
 }
 
 private struct SearchableMenuItemsView: View {
-    private struct IndexedItem {
+    private struct VisibleGroup {
         let index: Int
+        let group: MenuItemGroup
+        let items: [IndexedItem]
+        let open: Bool
+    }
+
+    private struct IndexedItem {
+        let id: String
         let item: MenuItem
     }
 
@@ -509,15 +533,38 @@ private struct SearchableMenuItemsView: View {
 
     @Environment(MenuPresenter.self) private var presenter
     @State private var filter = ""
+    @State private var expanded: Set<Int>
+    // The groups the reader had open before typing, put back when the filter is cleared.
+    @State private var expandedBeforeFilter: Set<Int>?
     @FocusState private var filterFocused: Bool
 
-    private var items: [IndexedItem] {
-        searchable.items.enumerated().compactMap { index, item in
-            item.matches(filter) ? IndexedItem(index: index, item: item) : nil
+    init(searchable: SearchableMenuItems, checkColumn: Bool, iconColumn: Bool,
+         tintColumn: Bool, usesSharedMarkColumn: Bool) {
+        self.searchable = searchable
+        self.checkColumn = checkColumn
+        self.iconColumn = iconColumn
+        self.tintColumn = tintColumn
+        self.usesSharedMarkColumn = usesSharedMarkColumn
+        _expanded = State(initialValue: Set(searchable.groups.indices.filter {
+            searchable.groups[$0].startsExpanded
+        }))
+    }
+
+    // While filtering, a group with no match is hidden so the heading does not promise
+    // rows that are not there.
+    private var groups: [VisibleGroup] {
+        searchable.groups.enumerated().compactMap { groupIndex, group in
+            let items = group.items.enumerated().compactMap { index, item in
+                item.matches(filter) ? IndexedItem(id: "\(groupIndex)-\(index)", item: item) : nil
+            }
+            if items.isEmpty && !filter.trimmed.isEmpty { return nil }
+            return VisibleGroup(index: groupIndex, group: group, items: items,
+                                open: group.title == nil || expanded.contains(groupIndex))
         }
     }
 
     var body: some View {
+        let groups = groups
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
@@ -544,7 +591,7 @@ private struct SearchableMenuItemsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
 
-            if items.isEmpty {
+            if groups.allSatisfy({ $0.items.isEmpty }) {
                 Text(searchable.noResults)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -552,25 +599,69 @@ private struct SearchableMenuItemsView: View {
                     .padding(.vertical, 10)
                     .transition(.fadeIn)
             } else {
-                ForEach(items, id: \.index) { indexed in
-                    MenuItemRow(item: indexed.item,
-                                checkColumn: checkColumn,
-                                iconColumn: iconColumn,
-                                tintColumn: tintColumn,
-                                usesSharedMarkColumn: usesSharedMarkColumn,
-                                action: indexed.item.handler == nil
-                                    ? nil : { presenter.run(indexed.item) },
-                                detailAction: indexed.item.detailHandler == nil
-                                    ? nil : { presenter.runDetail(indexed.item) })
-                        .transition(.fadeIn)
+                ForEach(groups, id: \.index) { visible in
+                    if let title = visible.group.title {
+                        groupHeading(title, count: visible.items.count,
+                                     index: visible.index, open: visible.open)
+                    }
+                    if visible.open {
+                        ForEach(visible.items, id: \.id) { indexed in
+                            MenuItemRow(item: indexed.item,
+                                        checkColumn: checkColumn,
+                                        iconColumn: iconColumn,
+                                        tintColumn: tintColumn,
+                                        usesSharedMarkColumn: usesSharedMarkColumn,
+                                        action: indexed.item.handler == nil
+                                            ? nil : { presenter.run(indexed.item) },
+                                        detailAction: indexed.item.detailHandler == nil
+                                            ? nil : { presenter.runDetail(indexed.item) })
+                                .padding(.leading, visible.group.title == nil ? 0 : 14)
+                                .transition(.fadeIn)
+                        }
+                    }
                 }
             }
         }
-        .smoothlyResizes(when: items.map(\.index))
+        .smoothlyResizes(when: groups.flatMap { $0.open ? $0.items.map(\.id) : ["\($0.index)"] })
+        // Typing opens every group so a match is never hidden inside a folded one.
+        .onChange(of: filter.trimmed.isEmpty) { _, cleared in
+            if cleared {
+                expanded = expandedBeforeFilter ?? expanded
+                expandedBeforeFilter = nil
+            } else {
+                expandedBeforeFilter = expanded
+                expanded = Set(searchable.groups.indices)
+            }
+        }
         .task {
             await Task.yield()
             filterFocused = true
         }
+    }
+
+    private func groupHeading(_ title: String, count: Int, index: Int, open: Bool) -> some View {
+        Button {
+            if open { expanded.remove(index) } else { expanded.insert(index) }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .frame(width: 10)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text("\(count)")
+                    .font(.mono(11))
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .motion(Motion.control, value: open)
     }
 }
 

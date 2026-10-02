@@ -266,20 +266,29 @@ struct ChangesView: View {
             })
         }
         let remote = snapshot.remoteBranches.map { branch in
-            MenuItem(label: branch.name, detail: branch.remote, handler: {
-                perform("Checking out \(branch.ref)…", failure: "Could not check out branch") {
-                    await GitActions.checkoutRemoteBranch(branch, at: repoRoot)
+            // A remote branch that already has a local one of the same name opens that,
+            // rather than making a second copy.
+            let hasLocal = snapshot.branches.contains(branch.name)
+            return MenuItem(label: branch.ref, handler: {
+                perform("Switching to \(branch.name)…", failure: "Could not switch branch") {
+                    if hasLocal {
+                        return await GitActions.switchBranch(branch.name, at: repoRoot)
+                    }
+                    return await GitActions.checkoutRemoteBranch(branch, at: repoRoot)
                 }
             })
         }
-        let items = local + remote
-        // A handful of branches read faster as plain rows than behind a field to type in.
-        if items.count > 6 {
-            entries.append(.searchable(items,
+        if remote.isEmpty && local.count <= 6 {
+            // A handful of branches read faster as plain rows than behind a field to type in.
+            entries.append(contentsOf: local.map { MenuEntry.item($0) })
+        } else {
+            let groups = [
+                MenuItemGroup(title: "Local", items: local),
+                MenuItemGroup(title: "Remote", items: remote, startsExpanded: false)
+            ]
+            entries.append(.searchable(groups: groups.filter { !$0.items.isEmpty },
                                        prompt: "Filter branches by name",
                                        noResults: "No branch matches this filter."))
-        } else {
-            entries.append(contentsOf: items.map { MenuEntry.item($0) })
         }
         return entries
     }

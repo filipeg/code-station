@@ -70,8 +70,8 @@ struct GitSnapshot: Sendable, Equatable {
     var onBranch: Bool = false
     // Local branches, most recently committed first, for the branch switcher.
     var branches: [String] = []
-    // Branches that exist on a remote with no local branch of the same name yet, such as
-    // one pushed by someone else or by an agent working in another clone.
+    // Every branch the remotes had at the last fetch, most recently committed first,
+    // including ones pushed from another clone that have no local branch yet.
     var remoteBranches: [RemoteBranch] = []
     // The remote branch this one tracks, and how the two have drifted apart.
     var upstream: String?
@@ -274,12 +274,10 @@ enum GitInspector {
                                     "--sort=-committerdate"], in: url,
                              timeout: commandTimeout)
         if remoteRefs.ok {
-            let local = Set(snapshot.branches)
             snapshot.remoteBranches = remoteRefs.text.split(separator: "\n").compactMap { line in
                 let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
                 guard fields.count == 3, fields[2].isEmpty, !fields[1].isEmpty else { return nil }
                 let name = String(fields[1])
-                guard !local.contains(name) else { return nil }
                 let remote = String(fields[0].dropLast(name.count + 1))
                 return RemoteBranch(remote: remote, name: name)
             }
