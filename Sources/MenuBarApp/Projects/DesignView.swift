@@ -1,23 +1,24 @@
 import AppKit
 import SwiftUI
 
-// A Design session is one conversation on the left, with the composer under it, and the
-// live canvas on the right. The agent keeps reworking the same canvas, so there is only
-// ever one design to look at.
+// The transcript floats over the canvas; the composer stays below both surfaces.
 struct DesignView: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(MenuPresenter.self) private var menus
     @Environment(\.textScale) private var textScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let sessionID: UUID
     var onOpenImplementation: (() -> Void)? = nil
 
     @State private var canvas = DesignCanvas()
     @State private var composerFocused = false
-    @State private var conversationWidth = DesignSplitLayout.defaultConversationWidth
-    @State private var dragStartConversationWidth: CGFloat?
-    @State private var conversationCollapsed = false
+    @FocusState private var conversationToggleFocused: Bool
+    @State private var conversationExpanded = false
+    @State private var hasOpenedConversation = false
+    @State private var transcriptAtBottom = true
     @State private var selectionEnabled = false
     @State private var snapshotRequest: DesignSnapshotRequest?
     @State private var preparingHandoff = false
@@ -28,34 +29,7 @@ struct DesignView: View {
         if let session = store.session(sessionID),
            let artifactURL = store.designArtifactURL(for: session) {
             let directory = artifactURL.deletingLastPathComponent()
-            GeometryReader { geometry in
-                let width = conversationCollapsed
-                    ? DesignSplitLayout.collapsedWidth
-                    : DesignSplitLayout.conversationWidth(
-                        conversationWidth, availableWidth: geometry.size.width)
-
-                ZStack(alignment: .leading) {
-                    HStack(spacing: 0) {
-                        Group {
-                            if conversationCollapsed {
-                                conversationRail
-                            } else {
-                                conversationColumn(session, width: width)
-                            }
-                        }
-                        .frame(width: width)
-                        .clipped()
-                        Divider().overlay(Theme.hairline)
-                        canvasColumn(session, directory: directory)
-                    }
-
-                    if !conversationCollapsed {
-                        splitHandle(conversationWidth: width,
-                                    availableWidth: geometry.size.width)
-                            .offset(x: width - DesignSplitLayout.handleWidth / 2)
-                    }
-                }
-            }
+            canvasColumn(session, directory: directory)
             .onAppear {
                 store.hold(sessionID, for: .open)
                 AppNotifier.shared.clear(
@@ -82,45 +56,112 @@ struct DesignView: View {
 
     // MARK: - Conversation
 
-    private func conversationColumn(_ session: ChatSession, width: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Text("Conversation")
-                    .font(.system(size: 12, weight: .semibold))
-                Spacer(minLength: 8)
-                GlyphButton(icon: "sidebar.left", side: 26) { conversationCollapsed = true }
-                    .appTooltip("Hide conversation")
-                    .accessibilityLabel("Hide conversation")
+    private func floatingConversation(_ session: ChatSession, size: CGSize) -> some View {
+        let expandedSize = DesignConversationLayout.size(in: size, expanded: true)
+        let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded)
+        let needsYou = runner.question(sessionID) != nil || runner.waitIsStale(sessionID)
+            || hasTurnEndAction(runner.state(sessionID))
+        return VStack(spacing: 0) {
+            Button {
+                conversationExpanded.toggle()
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "bubble.left")
+                        .foregroundStyle(Theme.accent)
+                    Text("Conversation")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 4)
+                    if needsYou {
+                        StateLight(tone: .needsYou, size: 6)
+                        Text("Needs you").foregroundStyle(Theme.attentionText)
+                    } else if runner.state(sessionID).isBusy {
+                        StateLight(tone: .running, size: 6)
+                        Text("Working").foregroundStyle(.secondary)
+                    } else {
+                        Text(conversationExpanded ? "Collapse" : "Expand")
+                            .foregroundStyle(.secondary)
+                    }
+                    Image(systemName: conversationExpanded ? "chevron.down" : "arrow.up.left.and.arrow.down.right")
+                }
+                .font(.system(size: 11))
+                .padding(.horizontal, 18)
+                .frame(height: DesignConversationLayout.headerHeight)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 12)
-            .frame(height: DesignSplitLayout.barHeight)
-            .background(Theme.card)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(Theme.hairline).frame(height: 1)
+            .buttonStyle(.plain)
+            .focusable()
+            .focused($conversationToggleFocused)
+            .focusEffectDisabled()
+            .onKeyPress(keys: [.space, .return]) { _ in
+                conversationExpanded.toggle()
+                return .handled
             }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(conversationToggleFocused ? Theme.accent : .clear, lineWidth: 2)
+                    .padding(4)
+                    .allowsHitTesting(false)
+            }
+            .accessibilityLabel("Conversation")
+            .accessibilityValue((conversationExpanded ? "Expanded" : "Collapsed")
+                + (needsYou ? ", needs you" : runner.state(sessionID).isBusy ? ", working" : ""))
+            .accessibilityHint(conversationExpanded ? "Collapse the transcript" : "Expand the transcript")
 
-            transcript(session, width: width)
-            Divider().overlay(Theme.hairline)
-            turnNotices(session)
-            designComposer(session)
-        }
-        .background(Theme.background)
-    }
+            ZStack(alignment: .topLeading) {
+                // Its reading size and identity stay fixed while the outer card folds.
+                transcript(session, width: expandedSize.width)
+                    .frame(width: expandedSize.width,
+                           height: max(0, expandedSize.height - DesignConversationLayout.headerHeight))
+                    .background(Theme.background)
+                    .opacity(conversationExpanded ? 1 : 0)
+                    .allowsHitTesting(conversationExpanded)
+                    .disabled(!conversationExpanded)
+                    .accessibilityHidden(!conversationExpanded)
 
-    private var conversationRail: some View {
-        VStack(spacing: 10) {
-            GlyphButton(icon: "sidebar.left", side: 26) { conversationCollapsed = false }
-                .appTooltip("Show conversation")
-                .accessibilityLabel("Show conversation")
-            if runner.state(sessionID).isBusy {
-                StateLight(tone: .running, size: 6)
-                    .accessibilityLabel("Working")
+                if !conversationExpanded {
+                    Button { conversationExpanded = true } label: {
+                        Text(DesignConversationLayout.preview(session.messages))
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .lineSpacing(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(height: 56, alignment: .bottomLeading)
+                            .clipped()
+                            .frame(maxHeight: .infinity, alignment: .topLeading)
+                            .padding(.horizontal, 18)
+                            .padding(.bottom, 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: panelSize.width,
+                           height: max(0, panelSize.height - DesignConversationLayout.headerHeight))
+                    .accessibilityLabel("Expand conversation. " + DesignConversationLayout.preview(session.messages))
+                }
             }
-            Spacer()
+            .frame(width: panelSize.width,
+                   height: max(0, panelSize.height - DesignConversationLayout.headerHeight),
+                   alignment: .topLeading)
+            .clipped()
         }
-        .padding(.top, (DesignSplitLayout.barHeight - 26) / 2)
-        .frame(maxWidth: .infinity)
+        .frame(width: panelSize.width, height: panelSize.height)
         .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 17))
+        .overlay {
+            RoundedRectangle(cornerRadius: 17).stroke(Theme.border, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 8)
+        .background(DesignConversationDismissal(
+            expanded: conversationExpanded && dialogs.current == nil && !menus.isOpen
+        ) { keyboard in
+            conversationExpanded = false
+            if keyboard {
+                composerFocused = false
+                conversationToggleFocused = true
+            }
+        })
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
     }
 
     private func transcript(_ session: ChatSession, width: CGFloat) -> some View {
@@ -150,10 +191,21 @@ struct DesignView: View {
                                              latestPromptID: latestPromptID))
             }
             .defaultScrollAnchor(.bottom)
-            // Anything new - a prompt, streamed text, a call, a change of state - sends
-            // the conversation to its end.
+            .onChange(of: conversationExpanded) { _, expanded in
+                if expanded && !hasOpenedConversation {
+                    proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+                    hasOpenedConversation = true
+                }
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height - geometry.visibleRect.maxY < 28
+            } action: { _, atBottom in
+                transcriptAtBottom = atBottom
+            }
             .onChange(of: transcriptShape(session)) {
-                proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+                if conversationExpanded && transcriptAtBottom {
+                    proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+                }
             }
         }
     }
@@ -218,40 +270,6 @@ struct DesignView: View {
                         tools: session.messages.last?.tools.count ?? 0,
                         question: runner.question(sessionID)?.id,
                         state: runner.state(sessionID))
-    }
-
-    private func splitHandle(conversationWidth: CGFloat,
-                             availableWidth: CGFloat) -> some View {
-        Color.clear
-            .frame(width: DesignSplitLayout.handleWidth)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(coordinateSpace: .global)
-                    .onChanged { value in
-                        let start = dragStartConversationWidth ?? conversationWidth
-                        dragStartConversationWidth = start
-                        self.conversationWidth = DesignSplitLayout.conversationWidth(
-                            start + value.translation.width,
-                            availableWidth: availableWidth)
-                    }
-                    .onEnded { _ in dragStartConversationWidth = nil })
-            .onHover { inside in
-                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-            }
-            .appTooltip("Drag to resize")
-            .accessibilityElement()
-            .accessibilityLabel("Resize Design conversation")
-            .accessibilityValue("\(Int(conversationWidth)) points wide")
-            .accessibilityAdjustableAction { direction in
-                let change: CGFloat = switch direction {
-                case .increment: 32
-                case .decrement: -32
-                @unknown default: 0
-                }
-                self.conversationWidth = DesignSplitLayout.conversationWidth(
-                    conversationWidth + change,
-                    availableWidth: availableWidth)
-            }
     }
 
     // MARK: - Composer
@@ -413,14 +431,22 @@ struct DesignView: View {
                 }
             }
 
-            canvasContent(session, directory: directory, busy: busy)
-
-            // The folded conversation rail is too narrow for the composer, so it moves here.
-            if conversationCollapsed {
-                Divider().overlay(Theme.hairline)
-                turnNotices(session)
-                designComposer(session)
+            GeometryReader { geometry in
+                let toolbarHeight = canvas.revision != nil && canvas.screenURL(in: directory) != nil
+                    ? DesignWebView.toolbarHeight : 0
+                let workspace = CGSize(width: geometry.size.width,
+                                       height: max(0, geometry.size.height - toolbarHeight))
+                canvasContent(session, directory: directory, busy: busy)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .overlay(alignment: .bottomLeading) {
+                        floatingConversation(session, size: workspace)
+                            .padding(DesignConversationLayout.inset(in: workspace))
+                            .padding(.bottom, toolbarHeight)
+                    }
             }
+            Divider().overlay(Theme.hairline)
+            turnNotices(session)
+            designComposer(session)
         }
     }
 
@@ -449,9 +475,7 @@ struct DesignView: View {
         } else {
             PaneMessage(icon: "rectangle.on.rectangle.angled",
                         title: "Your design appears here",
-                        detail: conversationCollapsed
-                            ? "Describe what to design in the prompt below."
-                            : "Describe what to design in the prompt under the conversation.")
+                        detail: "Describe what to design in the prompt below.")
                 .background(Theme.sunken)
         }
     }
@@ -809,24 +833,8 @@ struct DesignCanvasBar<Leading: View, Tools: View>: View {
 }
 
 enum DesignSplitLayout {
-    static let defaultConversationWidth: CGFloat = 300
-    static let minimumConversationWidth: CGFloat = 280
     static let minimumCanvasWidth: CGFloat = 320
-    static let dividerWidth: CGFloat = 1
-    static let handleWidth: CGFloat = 9
-    // The conversation folded down to its rail, which leaves the canvas the pane.
-    static let collapsedWidth: CGFloat = 44
-    // The conversation header and the canvas bar share one height so they read as one strip.
     static let barHeight: CGFloat = 42
-
-    static func conversationWidth(_ proposedWidth: CGFloat,
-                                  availableWidth: CGFloat) -> CGFloat {
-        let paneWidth = max(0, availableWidth - dividerWidth)
-        let halfWidth = paneWidth / 2
-        let minimum = min(minimumConversationWidth, halfWidth)
-        let maximum = max(minimum, paneWidth - min(minimumCanvasWidth, halfWidth))
-        return min(max(proposedWidth, minimum), maximum)
-    }
 }
 
 struct DesignElementSelection: Equatable {

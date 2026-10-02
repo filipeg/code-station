@@ -3,6 +3,8 @@ import SwiftUI
 import WebKit
 
 struct DesignWebView: View {
+    static let toolbarHeight: CGFloat = 28
+
     let url: URL
     let readAccessURL: URL
     let screen: DesignScreen?
@@ -52,7 +54,7 @@ struct DesignWebView: View {
             }
             .font(.system(size: 10.5, weight: .medium))
             .padding(.horizontal, 12)
-            .frame(height: 28)
+            .frame(height: Self.toolbarHeight)
             .background(Theme.card)
             .overlay(alignment: .top) {
                 Rectangle().fill(Theme.hairline).frame(height: 1)
