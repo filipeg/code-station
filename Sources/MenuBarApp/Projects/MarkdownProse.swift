@@ -666,15 +666,15 @@ struct SelectableText: View {
     // Several blocks drawn as one text view. Each block's type and the gap above it
     // travel in the string, so the size and weight here are only what a run that carries
     // none of its own falls back to.
-    init(prose: AttributedString) {
+    init(prose: AttributedString, lineSpacing: CGFloat = 0, width: TextWidth = .fills) {
         self.init(attributed: prose,
                   size: 13.5,
                   weight: .regular,
                   design: .default,
                   secondary: false,
-                  lineSpacing: 0,
+                  lineSpacing: lineSpacing,
                   alignment: .leading,
-                  width: .fills,
+                  width: width,
                   italic: false,
                   role: .block)
     }

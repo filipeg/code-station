@@ -1555,6 +1555,9 @@ struct SessionView: View {
 
             TurnEndActions(sessionID: sessionID, state: state)
         }
+        .modifier(SentPromptCommands(agent: session.agent,
+                                     workingDirectories: store.workingDirectories(for: session),
+                                     latestPromptID: session.messages.last(where: { $0.role == .user })?.id))
     }
 
     // What to do with what the turn left behind. It sits at the end of the conversation

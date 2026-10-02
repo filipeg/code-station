@@ -70,13 +70,7 @@ struct MessageView: View, Equatable {
                     }
                 }
                 if !message.text.isEmpty {
-                    // The bubble is drawn around the words, so the text claims only the
-                    // width it fills rather than the whole cap it is allowed.
-                    SelectableText(plain: message.text,
-                                   size: 13.5,
-                                   lineSpacing: 3,
-                                   width: .hugs)
-                        .fixedSize(horizontal: false, vertical: true)
+                    SentPromptText(text: message.text)
                 }
             }
             .padding(.leading, 15)
@@ -96,6 +90,7 @@ struct MessageView: View, Equatable {
             // every size.
             .frame(maxWidth: userBubbleWidth, alignment: .trailing)
         }
+        .environment(\.openURL, transcriptOpenURL)
     }
 
     private var userBubbleLeadingSpace: CGFloat {
@@ -145,7 +140,11 @@ struct MessageView: View, Equatable {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .environment(\.openURL, OpenURLAction { url in
+        .environment(\.openURL, transcriptOpenURL)
+    }
+
+    private var transcriptOpenURL: OpenURLAction {
+        OpenURLAction { url in
             guard let file = TranscriptLink.finderTarget(for: url) else { return .systemAction }
             if FileManager.default.fileExists(atPath: file.path) {
                 NSWorkspace.shared.activateFileViewerSelecting([file])
@@ -155,7 +154,7 @@ struct MessageView: View, Equatable {
                     inFileViewerRootedAtPath: file.deletingLastPathComponent().path)
             }
             return .handled
-        })
+        }
     }
 }
 
@@ -296,7 +295,7 @@ private struct TranscriptCopyButton: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func transcriptCopyButton(for text: String,
                               tooltip: String = "Copy text",
                               inset: CGFloat = 4) -> some View {

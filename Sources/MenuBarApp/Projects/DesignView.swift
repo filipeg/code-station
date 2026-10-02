@@ -173,6 +173,9 @@ struct DesignView: View {
                     Color.clear.frame(height: 1).id("design-transcript-bottom")
                 }
                 .padding(16)
+                .modifier(SentPromptCommands(agent: session.agent,
+                                             workingDirectories: store.workingDirectories(for: session),
+                                             latestPromptID: session.messages.last(where: { $0.role == .user })?.id))
             }
             .defaultScrollAnchor(.bottom)
             // Anything new - a row, streamed text, a call, a question, a change of state -
