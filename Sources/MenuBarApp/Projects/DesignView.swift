@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 // A Design conversation reads as a list of versions on the left, each one the prompt that
-// made it beside a thumbnail of what it left on the canvas, and the live canvas on the
-// right with the composer under it. Every turn that changes the canvas is saved as a
+// made it beside a thumbnail of what it left on the canvas, with the composer under the
+// list, and the live canvas on the right. Every turn that changes the canvas is saved as a
 // version on its own, so going back is picking a card rather than a menu entry.
 struct DesignView: View {
     @Environment(ProjectStore.self) private var store
@@ -210,6 +210,10 @@ struct DesignView: View {
                     proxy.scrollTo("design-versions-bottom", anchor: .bottom)
                 }
             }
+
+            Divider().overlay(Theme.hairline)
+            turnNotices(session)
+            designComposer(session)
         }
         .background(Theme.background)
     }
@@ -693,9 +697,12 @@ struct DesignView: View {
                 }
             }
 
-            Divider().overlay(Theme.hairline)
-            turnNotices(session)
-            designComposer(session)
+            // The folded versions rail is too narrow for the composer, so it moves here.
+            if versionsCollapsed {
+                Divider().overlay(Theme.hairline)
+                turnNotices(session)
+                designComposer(session)
+            }
         }
     }
 
