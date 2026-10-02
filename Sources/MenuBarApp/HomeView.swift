@@ -12,7 +12,6 @@ struct HomeView: View {
     @Environment(AppSettings.self) private var appSettings
     @Environment(WorkingTreeWatch.self) private var workingTrees
     @Environment(SessionTimeWatch.self) private var sessionTimes
-    @Environment(GlobalCommandPaletteController.self) private var commandPalette
 
     // Recomputed once per redraw and handed down, because every section below counts over
     // the same list of sessions.
@@ -77,7 +76,7 @@ struct HomeView: View {
         return GeometryReader { geometry in
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    hero(map)
+                    introduction(map)
                     HomeWorkMapView(map: map,
                                     compact: geometry.size.width - 48 < 650) { live in
                         open(live)
@@ -92,13 +91,6 @@ struct HomeView: View {
         }
     }
 
-    private func hero(_ map: HomeWorkMap) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 20) { introduction(map); Spacer(minLength: 12); newSession }
-            VStack(alignment: .leading, spacing: 14) { introduction(map); newSession }
-        }
-    }
-
     private func introduction(_ map: HomeWorkMap) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Your work, in motion.").font(.serif(36, .medium))
@@ -106,28 +98,6 @@ struct HomeView: View {
                  + (map.waiting.isEmpty ? "You're all caught up." : "\(map.waiting.count) need your attention."))
                 .font(.system(size: 13)).foregroundStyle(.secondary)
         }
-    }
-
-    private var newSession: some View {
-        ActionButton(title: "New session", tone: .green, height: 36, icon: "plus", disclosure: true)
-            .appMenu {
-                var items = store.regularProjects.filter { !store.isMissing($0) }.map { project in
-                    MenuItem(label: project.name, icon: "folder", subtitle: project.collapsedPath) {
-                        store.selectProject(project.id)
-                        commandPalette.requestNewSession()
-                    }
-                }
-                items += store.workspaces.filter { workspace in
-                    workspace.projectIDs.compactMap(store.project).allSatisfy { !store.isMissing($0) }
-                }.map { workspace in
-                    MenuItem(label: workspace.name, icon: "square.grid.2x2", subtitle: "Workspace") {
-                        store.selectWorkspace(workspace.id)
-                        commandPalette.requestNewSession()
-                    }
-                }
-                return [.searchable(items, prompt: "Choose a project or workspace",
-                                    noResults: "No available project or workspace.")]
-            }
     }
 
     private func open(_ live: HomeLive) {
