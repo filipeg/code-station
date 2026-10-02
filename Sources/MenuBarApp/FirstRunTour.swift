@@ -24,7 +24,7 @@ struct FirstRunTour: View {
     @State private var selected = 2
     @FocusState private var focused: Int?
 
-    static func dialog(closeTitle: String = "Done", onClose: @escaping () -> Void = {}) -> Dialog {
+    static func dialog(closeTitle: String, onClose: @escaping () -> Void = {}) -> Dialog {
         Dialog(title: "See how Code Station works",
                message: "A session brings the conversation, files, Git changes, and tools into one place. Each agent uses its own CLI and account.",
                content: AnyView(FirstRunTour(closeTitle: closeTitle)),

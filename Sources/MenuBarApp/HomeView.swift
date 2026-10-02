@@ -12,9 +12,7 @@ struct HomeView: View {
     @Environment(AppSettings.self) private var appSettings
     @Environment(WorkingTreeWatch.self) private var workingTrees
     @Environment(SessionTimeWatch.self) private var sessionTimes
-    @Environment(DialogPresenter.self) private var dialogs
     @Environment(GlobalCommandPaletteController.self) private var commandPalette
-    @FocusState private var tourFocused: Bool
 
     // Recomputed once per redraw and handed down, because every section below counts over
     // the same list of sessions.
@@ -63,11 +61,6 @@ struct HomeView: View {
                          style: .field)
 
             Spacer(minLength: 12)
-
-            InlineLink(title: "See how it works") {
-                dialogs.show(FirstRunTour.dialog { tourFocused = true })
-            }
-            .focused($tourFocused)
 
             if appSettings.mobileAccessEnabled {
                 MobileAccessButton(scope: .everything)
