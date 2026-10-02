@@ -155,15 +155,6 @@ struct DesignView: View {
             designComposer(session)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
-            HStack(spacing: 6) {
-                ForEach(DesignStarter.allCases, id: \.self) { starter in
-                    ActionButton(title: starter.title, tone: .outlined,
-                                 height: 26, size: 11) {
-                        runner.editDraft(sessionID) { $0.text = starter.prompt }
-                        composerFocused = true
-                    }
-                }
-            }
         }
         .frame(maxWidth: 560)
         .padding(32)
@@ -1006,28 +997,6 @@ struct DesignView: View {
             onOpenImplementation()
         } else {
             store.selectSession(implementation.id)
-        }
-    }
-}
-
-// The quick starts under the first prompt. Each one fills the composer rather than
-// sending, so the rest of the request can be typed after it.
-private enum DesignStarter: CaseIterable {
-    case newScreen, reworkScreen, flow
-
-    var title: String {
-        switch self {
-        case .newScreen: "A new screen"
-        case .reworkScreen: "Rework a screen"
-        case .flow: "A flow across screens"
-        }
-    }
-
-    var prompt: String {
-        switch self {
-        case .newScreen: "A new screen for "
-        case .reworkScreen: "Rework the screen that "
-        case .flow: "A flow across screens for "
         }
     }
 }
