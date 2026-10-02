@@ -81,7 +81,6 @@ struct HomeWorkMap {
 
 struct HomeWorkMapView: View {
     let map: HomeWorkMap
-    @Binding var needsYouOnly: Bool
     let compact: Bool
     let open: (HomeLive) -> Void
 
@@ -92,14 +91,22 @@ struct HomeWorkMapView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            ViewThatFits(in: .horizontal) {
-                HStack { heading; Spacer(minLength: 12); filters }
-                VStack(alignment: .leading, spacing: 12) { heading; filters }
-            }
+            heading
             if map.active.isEmpty {
-                PaneMessage(icon: "circle.grid.cross", title: "Room for your next idea",
-                            detail: "No sessions are active. Start something new or pick up a recent conversation.")
-                    .frame(minHeight: 280)
+                HStack(spacing: 14) {
+                    Image(systemName: "circle.grid.cross")
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Room for your next idea").font(.serif(15, .semibold))
+                        Text("No sessions are active. Start something new or pick up a recent conversation.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
             } else if spatial {
                 spatialMap
             } else {
@@ -115,13 +122,11 @@ struct HomeWorkMapView: View {
                 }
                 .frame(height: 320)
             }
-            if needsYouOnly && map.waiting.isEmpty {
-                Text("You're all caught up. Nothing needs your attention.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            ViewThatFits(in: .horizontal) {
-                HStack { legend; Spacer(); caption }
-                VStack(alignment: .leading, spacing: 8) { legend; caption }
+            if !map.active.isEmpty {
+                ViewThatFits(in: .horizontal) {
+                    HStack { legend; Spacer(); caption }
+                    VStack(alignment: .leading, spacing: 8) { legend; caption }
+                }
             }
         }
         .padding(20)
@@ -146,19 +151,6 @@ struct HomeWorkMapView: View {
         Label("Your work map", systemImage: "square.grid.2x2")
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(Theme.accent)
-    }
-
-    private var filters: some View {
-        HStack(spacing: 4) {
-            ChoicePill(title: "All active \(map.active.count)", selected: !needsYouOnly) {
-                needsYouOnly = false
-            }
-            .accessibilityAddTraits(!needsYouOnly ? .isSelected : [])
-            ChoicePill(title: "Needs you \(map.waiting.count)", selected: needsYouOnly) {
-                needsYouOnly = true
-            }
-            .accessibilityAddTraits(needsYouOnly ? .isSelected : [])
-        }
     }
 
     private var spatialMap: some View {
@@ -243,7 +235,7 @@ struct HomeWorkMapView: View {
             .padding(12)
             ForEach(group.sessions) { live in
                 Rectangle().fill(Theme.hairline).frame(height: 1)
-                HomeMapSessionRow(live: live, dimmed: needsYouOnly && !live.needsAttention) { open(live) }
+                HomeMapSessionRow(live: live) { open(live) }
             }
         }
         .cardSurface(cornerRadius: 12)
@@ -275,7 +267,6 @@ private struct MapAnchors: PreferenceKey {
 
 private struct HomeMapSessionRow: View {
     let live: HomeLive
-    let dimmed: Bool
     let open: () -> Void
     @State private var hovering = false
     @FocusState private var focused: Bool
@@ -304,7 +295,6 @@ private struct HomeMapSessionRow: View {
         .buttonStyle(.plain)
         .focused($focused)
         .onHover { hovering = $0 }
-        .opacity(dimmed ? 0.4 : 1)
         .accessibilityLabel("\(live.session.title), \(live.status), \(live.containerName)")
         .accessibilityHint("Opens this session")
     }

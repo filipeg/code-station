@@ -15,7 +15,6 @@ struct HomeView: View {
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(GlobalCommandPaletteController.self) private var commandPalette
     @FocusState private var tourFocused: Bool
-    @State private var needsYouOnly = false
 
     // Recomputed once per redraw and handed down, because every section below counts over
     // the same list of sessions.
@@ -86,7 +85,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     hero(map)
-                    HomeWorkMapView(map: map, needsYouOnly: $needsYouOnly,
+                    HomeWorkMapView(map: map,
                                     compact: geometry.size.width - 48 < 650) { live in
                         open(live)
                     }
