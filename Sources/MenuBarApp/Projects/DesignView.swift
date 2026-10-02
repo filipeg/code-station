@@ -10,6 +10,7 @@ struct DesignView: View {
     @Environment(SessionRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(\.textScale) private var textScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let sessionID: UUID
     var onOpenImplementation: (() -> Void)? = nil
@@ -267,9 +268,10 @@ struct DesignView: View {
 
                 if !work.isEmpty {
                     Button { toggleFold(turn) } label: {
-                        Image(systemName: open ? "chevron.up" : "chevron.down")
+                        Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(open ? 180 : 0))
                             .frame(width: 20, height: 20)
                             .contentShape(Rectangle())
                     }
@@ -291,10 +293,13 @@ struct DesignView: View {
                             .environment(\.activeTranscriptTools, runner.runningTools(sessionID))
                     }
                 }
+                .transition(.fold)
             }
         }
         .padding(9)
         .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
+        // Folding work fades out while the card shrinks, so it must not spill past the card.
+        .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10)
             .strokeBorder(selected ? Theme.accent : Theme.hairline,
                           lineWidth: selected ? 1.5 : 1))
@@ -358,8 +363,10 @@ struct DesignView: View {
     }
 
     private func toggleFold(_ turn: DesignTurn) {
-        if toggledTurns.contains(turn.id) { toggledTurns.remove(turn.id) }
-        else { toggledTurns.insert(turn.id) }
+        withAnimation(reduceMotion ? nil : Motion.reveal) {
+            if toggledTurns.contains(turn.id) { toggledTurns.remove(turn.id) }
+            else { toggledTurns.insert(turn.id) }
+        }
     }
 
     // What the agent is doing, on the newest card. A held-open turn looks exactly like a
