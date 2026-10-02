@@ -1102,21 +1102,40 @@ final class ProjectStore {
     }
 
     func saveDesignRevision(_ sessionID: UUID, screenshot: Data?,
-                            sourceRevisions: [String: String])
+                            sourceRevisions: [String: String], promptID: UUID? = nil)
         -> Result<DesignRevision, PersistenceFailure> {
         storeDesignRevision(sessionID, screenshot: screenshot,
-                            sourceRevisions: sourceRevisions, approved: false)
+                            sourceRevisions: sourceRevisions, promptID: promptID,
+                            approved: false)
     }
 
     func approveDesign(_ sessionID: UUID, screenshot: Data?,
-                       sourceRevisions: [String: String])
+                       sourceRevisions: [String: String], promptID: UUID? = nil)
         -> Result<DesignRevision, PersistenceFailure> {
         storeDesignRevision(sessionID, screenshot: screenshot,
-                            sourceRevisions: sourceRevisions, approved: true)
+                            sourceRevisions: sourceRevisions, promptID: promptID,
+                            approved: true)
+    }
+
+    // Approves a version that is already saved, so handing over what is on the canvas
+    // does not save the same files a second time under a new number.
+    func approveDesignRevision(_ revisionID: UUID, for sessionID: UUID)
+        -> Result<DesignRevision, PersistenceFailure> {
+        guard let i = index(sessionID), sessions[i].ownsDesign,
+              let revision = sessions[i].designRevisions.first(where: { $0.id == revisionID }) else {
+            return .failure(PersistenceFailure(message: "The Design revision is no longer available."))
+        }
+        let previous = sessions[i].approvedDesignRevisionID
+        sessions[i].approvedDesignRevisionID = revision.id
+        markIndexDirty()
+        return saveOrRollBack(revision, failure: "The approved Design could not be saved.") {
+            sessions[i].approvedDesignRevisionID = previous
+        }
     }
 
     private func storeDesignRevision(_ sessionID: UUID, screenshot: Data?,
-                                     sourceRevisions: [String: String], approved: Bool)
+                                     sourceRevisions: [String: String], promptID: UUID?,
+                                     approved: Bool)
         -> Result<DesignRevision, PersistenceFailure> {
         guard let i = index(sessionID), sessions[i].ownsDesign else {
             return .failure(PersistenceFailure(message: "The Design session is no longer available."))
@@ -1128,7 +1147,8 @@ final class ProjectStore {
             number: (sessions[i].designRevisions.map(\.number).max() ?? 0) + 1,
             createdAt: Date(),
             sourceRevisions: sourceRevisions,
-            screens: manifest.screens)
+            screens: manifest.screens,
+            promptID: promptID)
         let fallback = fallbackHandoff(for: sessions[i], revision: revision)
         do {
             try DesignArtifacts.saveRevision(revision, from: directory,

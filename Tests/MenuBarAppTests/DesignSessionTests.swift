@@ -303,6 +303,56 @@ struct DesignSessionTests {
         #expect(session.approvedDesignRevisionID == nil)
     }
 
+    @Test func aSavedVersionMatchesTheLiveCanvasUntilItChanges() throws {
+        let design = store.newSession(in: project.id, seed: .init(mode: .design))
+        let directory = try writeDesign(for: design, in: store, html: "<html>One</html>")
+        let prompt = UUID()
+
+        let saved = try store.saveDesignRevision(
+            design.id, screenshot: nil, sourceRevisions: [:], promptID: prompt).get()
+
+        #expect(saved.promptID == prompt)
+        #expect(DesignArtifacts.matchesLive(saved, designDirectory: directory))
+        try Data("<html>Two</html>".utf8)
+            .write(to: directory.appendingPathComponent("index.html"), options: .atomic)
+        #expect(!DesignArtifacts.matchesLive(saved, designDirectory: directory))
+    }
+
+    @Test func versionsKeepTheirPromptAcrossARestart() throws {
+        let design = store.newSession(in: project.id, seed: .init(mode: .design))
+        _ = try writeDesign(for: design, in: store, html: "<html>One</html>")
+        let prompt = UUID()
+        let saved = try store.saveDesignRevision(
+            design.id, screenshot: nil, sourceRevisions: [:], promptID: prompt).get()
+
+        let restored = ProjectStore(storeURL: store.storeURL)
+
+        #expect(restored.session(design.id)?.designRevisions.first { $0.id == saved.id }?.promptID
+                == prompt)
+    }
+
+    @Test func approvingASavedVersionDoesNotSaveItAgain() throws {
+        let design = store.newSession(in: project.id, seed: .init(mode: .design))
+        _ = try writeDesign(for: design, in: store, html: "<html>One</html>")
+        let saved = try store.saveDesignRevision(
+            design.id, screenshot: nil, sourceRevisions: [:]).get()
+
+        let approved = try store.approveDesignRevision(saved.id, for: design.id).get()
+
+        let session = try #require(store.session(design.id))
+        #expect(approved.id == saved.id)
+        #expect(session.designRevisions.map(\.id) == [saved.id])
+        #expect(session.approvedDesignRevisionID == saved.id)
+    }
+
+    @Test func approvingAMissingVersionFails() {
+        let design = store.newSession(in: project.id, seed: .init(mode: .design))
+        if case .success = store.approveDesignRevision(UUID(), for: design.id) {
+            Issue.record("Expected an unknown version to be refused")
+        }
+        #expect(store.session(design.id)?.approvedDesignRevisionID == nil)
+    }
+
     @Test func buildReceivesLaterRevisionsFromItsEditableDesign() throws {
         let original = store.newSession(in: project.id, seed: .init(mode: .design))
         _ = try writeDesign(for: original, in: store,

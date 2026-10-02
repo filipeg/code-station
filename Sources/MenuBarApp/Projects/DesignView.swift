@@ -1,8 +1,10 @@
 import AppKit
 import SwiftUI
 
-// A Design conversation keeps the agent loop on the left and turns its durable HTML
-// artifact into a live canvas on the right.
+// A Design conversation reads as a list of versions on the left, each one the prompt that
+// made it beside a thumbnail of what it left on the canvas, and the live canvas on the
+// right with the composer under it. Every turn that changes the canvas is saved as a
+// version on its own, so going back is picking a card rather than a menu entry.
 struct DesignView: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
@@ -16,11 +18,19 @@ struct DesignView: View {
     @State private var composerFocused = false
     @State private var conversationWidth = DesignSplitLayout.defaultConversationWidth
     @State private var dragStartConversationWidth: CGFloat?
+    @State private var versionsCollapsed = false
+    // Nil while the live canvas is on view.
     @State private var displayedRevisionID: UUID?
-    @State private var comparingWithLive = false
+    // The saved version whose files the live canvas holds right now, if any.
+    @State private var liveRevisionID: UUID?
+    @State private var comparing = false
+    // Cards whose fold differs from the default: the newest turn starts open, the rest
+    // start folded.
+    @State private var toggledTurns: Set<UUID> = []
     @State private var selectionEnabled = false
     @State private var snapshotRequest: DesignSnapshotRequest?
     @State private var preparingHandoff = false
+    @State private var savingVersion = false
     @State private var waitNoticeDismissed = false
     @State private var designWindow = DesignWindow()
 
@@ -29,23 +39,39 @@ struct DesignView: View {
            let artifactURL = store.designArtifactURL(for: session) {
             let liveDirectory = artifactURL.deletingLastPathComponent()
             let displayedDirectory = displayedDirectory(for: session, live: liveDirectory)
+            let turns = DesignTurns.build(messages: session.messages,
+                                          revisions: session.designRevisions)
             GeometryReader { geometry in
-                let width = DesignSplitLayout.conversationWidth(
-                    conversationWidth, availableWidth: geometry.size.width)
+                if isEmpty(session) {
+                    firstPrompt(session)
+                } else {
+                    let width = versionsCollapsed
+                        ? DesignSplitLayout.collapsedWidth
+                        : DesignSplitLayout.conversationWidth(
+                            conversationWidth, availableWidth: geometry.size.width)
 
-                ZStack(alignment: .leading) {
-                    HStack(spacing: 0) {
-                        conversation(session, width: width)
+                    ZStack(alignment: .leading) {
+                        HStack(spacing: 0) {
+                            Group {
+                                if versionsCollapsed {
+                                    versionsRail(session)
+                                } else {
+                                    versionsColumn(session, turns: turns, width: width)
+                                }
+                            }
                             .frame(width: width)
                             .clipped()
-                        Divider().overlay(Theme.hairline)
-                        canvasPane(session, directory: displayedDirectory,
-                                   liveDirectory: liveDirectory)
-                    }
+                            Divider().overlay(Theme.hairline)
+                            canvasColumn(session, directory: displayedDirectory,
+                                         liveDirectory: liveDirectory)
+                        }
 
-                    splitHandle(conversationWidth: width,
-                                availableWidth: geometry.size.width)
-                        .offset(x: width - DesignSplitLayout.handleWidth / 2)
+                        if !versionsCollapsed {
+                            splitHandle(conversationWidth: width,
+                                        availableWidth: geometry.size.width)
+                                .offset(x: width - DesignSplitLayout.handleWidth / 2)
+                        }
+                    }
                 }
             }
             .onAppear {
@@ -61,6 +87,17 @@ struct DesignView: View {
             }
             .task(id: sessionID) { await store.transcriptReady(sessionID) }
             .task(id: displayedDirectory.path) { await canvas.watch(displayedDirectory) }
+            .task(id: versionCheck(session)) {
+                await checkVersions(liveDirectory: liveDirectory)
+            }
+            // Sending a prompt puts the live canvas back on view, since that is where
+            // the turn draws.
+            .onChange(of: runner.state(sessionID).isBusy) { _, busy in
+                if busy {
+                    displayedRevisionID = nil
+                    comparing = false
+                }
+            }
         } else {
             PaneMessage(icon: "paintbrush.pointed",
                         title: "This Design session is gone",
@@ -68,131 +105,305 @@ struct DesignView: View {
         }
     }
 
-    private func displayedDirectory(for session: ChatSession, live: URL) -> URL {
-        guard let displayedRevisionID,
-              let revision = session.designRevisions.first(where: { $0.id == displayedRevisionID })
-        else { return live }
-        return DesignArtifacts.materialsDirectory(revision, designDirectory: live)
+    // Only one place asks for the first prompt, so the pane shows nothing else until it
+    // is answered.
+    private func isEmpty(_ session: ChatSession) -> Bool {
+        session.messages.isEmpty && session.designRevisions.isEmpty
+            && canvas.revision == nil && !store.isTranscriptLoading(sessionID)
     }
 
-    // MARK: - Conversation
+    private func displayedDirectory(for session: ChatSession, live: URL) -> URL {
+        guard let displayedRevision = displayedRevision(in: session) else { return live }
+        return DesignArtifacts.materialsDirectory(displayedRevision, designDirectory: live)
+    }
 
-    private func conversation(_ session: ChatSession, width: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "paintbrush.pointed.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                Text("DESIGN")
-                    .font(.mono(10, .semibold))
-                    .kerning(1)
-                Spacer(minLength: 8)
-                designState
+    private func displayedRevision(in session: ChatSession) -> DesignRevision? {
+        guard let displayedRevisionID else { return nil }
+        return session.designRevisions.first { $0.id == displayedRevisionID }
+    }
+
+    private var displayedRevision: DesignRevision? {
+        store.session(sessionID).flatMap(displayedRevision(in:))
+    }
+
+    private var liveRevision: DesignRevision? {
+        guard let liveRevisionID, let session = store.session(sessionID) else { return nil }
+        return session.designRevisions.first { $0.id == liveRevisionID }
+    }
+
+    // The version the canvas is showing: the one picked, or the one the live files match.
+    private var shownRevision: DesignRevision? { displayedRevision ?? liveRevision }
+
+    private var latestPromptID: UUID? {
+        store.session(sessionID)?.messages.last(where: { $0.role == .user })?.id
+    }
+
+    // MARK: - First prompt
+
+    private func firstPrompt(_ session: ChatSession) -> some View {
+        VStack(spacing: 14) {
+            VStack(spacing: 6) {
+                Text("What should we design?")
+                    .font(.serif(22))
+                Text("Describe a screen, flow, prototype, deck, diagram, or visual. "
+                     + "Each prompt becomes a version you can go back to.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 14)
-            .frame(height: 38)
+            designComposer(session)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
+            HStack(spacing: 6) {
+                ForEach(DesignStarter.allCases, id: \.self) { starter in
+                    ActionButton(title: starter.title, tone: .outlined,
+                                 height: 26, size: 11) {
+                        runner.editDraft(sessionID) { $0.text = starter.prompt }
+                        composerFocused = true
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: 560)
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.background)
+    }
+
+    // MARK: - Versions
+
+    private func versionsColumn(_ session: ChatSession, turns: [DesignTurn],
+                                width: CGFloat) -> some View {
+        let projectPath = store.workingDirectory(for: session) ?? ""
+        let versionCount = session.designRevisions.count
+        return VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Text("Versions")
+                    .font(.system(size: 12, weight: .semibold))
+                if versionCount > 0 {
+                    Text("\(versionCount)")
+                        .font(.mono(10.5))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                compareButton(session)
+                GlyphButton(icon: "sidebar.left", side: 26) { versionsCollapsed = true }
+                    .appTooltip("Hide versions")
+                    .accessibilityLabel("Hide versions")
+            }
+            .padding(.horizontal, 12)
+            .frame(height: DesignSplitLayout.barHeight)
             .background(Theme.card)
             .overlay(alignment: .bottom) {
                 Rectangle().fill(Theme.hairline).frame(height: 1)
             }
 
-            designTranscript(session, width: width)
-            Divider().overlay(Theme.hairline)
-            designComposer(session)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(turns) { turn in
+                            versionCard(turn, session: session,
+                                        isLatest: turn.id == turns.last?.id,
+                                        projectPath: projectPath,
+                                        width: width)
+                        }
+                        Color.clear.frame(height: 1).id("design-versions-bottom")
+                    }
+                    .padding(10)
+                }
+                .defaultScrollAnchor(.bottom)
+                // Anything new - a turn, streamed text, a call, a change of state - sends
+                // the list to its end, where the newest card is.
+                .onChange(of: transcriptShape(session)) {
+                    proxy.scrollTo("design-versions-bottom", anchor: .bottom)
+                }
+            }
         }
         .background(Theme.background)
     }
 
-    private var designState: some View {
-        let tone = SessionTone(sessionID, store: store, runner: runner)
-        return HStack(spacing: 6) {
-            StateLight(tone: tone, size: 6)
-            Text(tone.word)
-                .font(.mono(9.5, .semibold))
-                .foregroundStyle(tone.colour)
+    private func versionsRail(_ session: ChatSession) -> some View {
+        VStack(spacing: 10) {
+            GlyphButton(icon: "sidebar.left", side: 26) { versionsCollapsed = false }
+                .appTooltip("Show versions")
+                .accessibilityLabel("Show versions")
+            if !session.designRevisions.isEmpty {
+                Text("\(session.designRevisions.count)")
+                    .font(.mono(10.5))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(counted(session.designRevisions.count, "version"))
+            }
+            if runner.state(sessionID).isBusy {
+                StateLight(tone: .running, size: 6)
+                    .accessibilityLabel("Working")
+            }
+            Spacer()
         }
-        .fixedSize()
+        .padding(.top, (DesignSplitLayout.barHeight - 26) / 2)
+        .frame(maxWidth: .infinity)
+        .background(Theme.card)
     }
 
-    private func designTranscript(_ session: ChatSession, width: CGFloat) -> some View {
-        let state = runner.state(sessionID)
-        let projectPath = store.workingDirectory(for: session) ?? ""
-        return ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if session.messages.isEmpty, !store.isTranscriptLoading(sessionID) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("What should we design?")
-                                .font(.serif(17))
-                            Text("Describe a screen, flow, prototype, deck, diagram, or visual. "
-                                 + "The agent will study this project and build it on the canvas.")
-                                .font(.system(size: 12.5))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 8)
-                    }
+    private func compareButton(_ session: ChatSession) -> some View {
+        let available = comparisonPair(session) != nil
+        return GlyphButton(icon: "rectangle.split.2x1", side: 26,
+                           active: comparing && available, tint: Theme.accent) {
+            comparing.toggle()
+        }
+        .disabled(!available)
+        .opacity(available ? 1 : 0.4)
+        .appTooltip(available ? "Compare with the version before it"
+                              : "Compare needs two versions")
+        .accessibilityLabel("Compare versions")
+    }
 
-                    ForEach(session.messages) { message in
+    // The version on view and the one saved before it, oldest first.
+    private func comparisonPair(_ session: ChatSession) -> (DesignRevision, DesignRevision)? {
+        let revisions = session.designRevisions.sorted { $0.number < $1.number }
+        guard let shown = shownRevision ?? revisions.last,
+              let index = revisions.firstIndex(where: { $0.id == shown.id }),
+              index > 0 else { return nil }
+        return (revisions[index - 1], shown)
+    }
+
+    private func isSelected(_ turn: DesignTurn, isLatest: Bool) -> Bool {
+        if let revision = turn.revision, let shown = shownRevision {
+            return revision.id == shown.id
+        }
+        // While the live canvas matches no version, it belongs to the newest turn.
+        return shownRevision == nil && isLatest
+    }
+
+    private func versionCard(_ turn: DesignTurn, session: ChatSession, isLatest: Bool,
+                             projectPath: String, width: CGFloat) -> some View {
+        let open = toggledTurns.contains(turn.id) != isLatest
+        let selected = isSelected(turn, isLatest: isLatest)
+        let working = isLatest && runner.state(sessionID).isBusy
+        let work = turn.work.filter { !$0.isEmpty }
+        let title = turn.title
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 6) {
+                Button { choose(turn, open: open) } label: {
+                    HStack(alignment: .top, spacing: 9) {
+                        thumbnail(turn, session: session)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            cardMeta(turn, session: session, working: working)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(turn.revision.map { "\($0.title): \(title)" } ?? title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityHint(turn.revision == nil ? "Shows the agent's work"
+                                                        : "Puts this version on the canvas")
+
+                if !work.isEmpty {
+                    Button { toggleFold(turn) } label: {
+                        Image(systemName: open ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .appTooltip(open ? "Hide the agent's work" : "Show the agent's work")
+                    .accessibilityLabel(open ? "Hide the agent's work" : "Show the agent's work")
+                }
+            }
+
+            if open, !work.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(work) { message in
                         MessageView(message: message,
                                     projectPath: projectPath,
                                     textScale: textScale,
-                                    availableWidth: width - 32)
+                                    availableWidth: width - 40)
                             .equatable()
                             .environment(\.runningAgents, runner.runningAgents(sessionID))
                             .environment(\.activeTranscriptTools, runner.runningTools(sessionID))
                     }
-
-                    if let request = runner.question(sessionID) {
-                        PermissionCard(request: request,
-                                       workingDirectories: store.session(sessionID)
-                                           .map(store.workingDirectories(for:)) ?? [],
-                                       projectPath: projectPath) { answer in
-                            runner.answer(request, with: answer,
-                                          sessionID: sessionID, store: store)
-                        }
-                        .id(request.id)
-                    }
-
-                    if state.isBusy, runner.question(sessionID) == nil {
-                        designStatus(session)
-                    }
-
-                    if state == .waiting, !waitNoticeDismissed,
-                       let waitingSince = runner.waitingSince(sessionID) {
-                        WaitingNotice(since: waitingSince,
-                                      tasks: runner.backgroundTasks(sessionID),
-                                      agentTitle: session.agent.title,
-                                      command: { session.shellCommand(for: $0) },
-                                      onKeepWaiting: { waitNoticeDismissed = true },
-                                      onEnd: { runner.endWait(sessionID) })
-                    }
-
-                    TurnEndActions(sessionID: sessionID, state: state)
-
-                    Color.clear.frame(height: 1).id("design-transcript-bottom")
                 }
-                .padding(16)
-                .modifier(SentPromptCommands(agent: session.agent,
-                                             workingDirectories: store.workingDirectories(for: session),
-                                             latestPromptID: session.messages.last(where: { $0.role == .user })?.id))
             }
-            .defaultScrollAnchor(.bottom)
-            // Anything new - a row, streamed text, a call, a question, a change of state -
-            // sends the transcript to its end.
-            .onChange(of: transcriptShape(session)) {
-                proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+        }
+        .padding(9)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(selected ? Theme.accent : Theme.hairline,
+                          lineWidth: selected ? 1.5 : 1))
+    }
+
+    @ViewBuilder
+    private func thumbnail(_ turn: DesignTurn, session: ChatSession) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 5)
+        Group {
+            if let revision = turn.revision {
+                DesignThumbnail(url: DesignArtifacts.previewURL(
+                    revision, designDirectory: store.designDirectory(for: session)))
+            } else {
+                Image(systemName: "text.bubble")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Theme.sunken)
             }
-            // A dismissed notice is dismissed for that wait only: the next one is a new
-            // turn parked on new tasks, and it has its own case to make.
-            .onChange(of: state) { _, state in
-                if state != .waiting { waitNoticeDismissed = false }
-            }
+        }
+        .frame(width: 46, height: 34)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Theme.hairline))
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func cardMeta(_ turn: DesignTurn, session: ChatSession, working: Bool) -> some View {
+        if working {
+            designStatus(session)
+        } else if let revision = turn.revision {
+            Text("Version \(revision.number), \(age(revision.createdAt))")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+        } else {
+            Text("No canvas change")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
         }
     }
 
-    // What the agent is doing, under the transcript. A held-open turn looks exactly like
-    // a working one from the outside, so a wait names the task keeping it open instead of
+    private func age(_ date: Date) -> String {
+        let short = RelativeTime.short(date)
+        return short == "now" ? "just now" : "\(short) ago"
+    }
+
+    // Picking a version puts it on the canvas; picking the one already there folds or
+    // unfolds its work instead. A card without a version only folds.
+    private func choose(_ turn: DesignTurn, open: Bool) {
+        guard let revision = turn.revision else {
+            toggleFold(turn)
+            return
+        }
+        if shownRevision?.id == revision.id {
+            toggleFold(turn)
+            return
+        }
+        displayedRevisionID = revision.id == liveRevisionID ? nil : revision.id
+        comparing = false
+        selectionEnabled = false
+    }
+
+    private func toggleFold(_ turn: DesignTurn) {
+        if toggledTurns.contains(turn.id) { toggledTurns.remove(turn.id) }
+        else { toggledTurns.insert(turn.id) }
+    }
+
+    // What the agent is doing, on the newest card. A held-open turn looks exactly like a
+    // working one from the outside, so a wait names the task keeping it open instead of
     // going on claiming the canvas is being worked on. Once the wait has gone stale the
     // line drops the live colour too: nothing is coming back from that task, and the pane
     // has to agree with the NEEDS YOU the header is already showing.
@@ -203,17 +414,17 @@ struct DesignView: View {
             let tasks = runner.backgroundTasks(sessionID)
             // Nothing arrives to redraw a parked turn, so the wait has to count itself up.
             TimelineView(.periodic(from: .now, by: 1)) { _ in
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     StateLight(tone: stale ? .needsYou : .waiting, size: 6)
                     Text(stale
                          ? "Nothing has come back from \(BackgroundTaskPhrase.of(tasks))"
                          : "Waiting for \(BackgroundTaskPhrase.of(tasks))")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(stale ? Theme.attentionText : .secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(RelativeTime.duration(since: waitingSince))
-                        .font(.system(size: 11))
+                        .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
@@ -227,11 +438,12 @@ struct DesignView: View {
                         note: tasks.map(\.label).joined(separator: "\n"))
             }
         } else {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 StateLight(tone: .running, size: 6)
                 Text("\(session.agent.title) is shaping the canvas…")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
     }
@@ -272,7 +484,7 @@ struct DesignView: View {
             }
             .appTooltip("Drag to resize")
             .accessibilityElement()
-            .accessibilityLabel("Resize Design conversation")
+            .accessibilityLabel("Resize Design versions")
             .accessibilityValue("\(Int(conversationWidth)) points wide")
             .accessibilityAdjustableAction { direction in
                 let change: CGFloat = switch direction {
@@ -286,19 +498,21 @@ struct DesignView: View {
             }
     }
 
+    // MARK: - Composer
+
     private func designComposer(_ session: ChatSession) -> some View {
         let blocked = !FileManager.default.fileExists(atPath: store.workingDirectory(for: session) ?? "")
             || !runner.isAvailable(session.agent)
-        let busy = runner.state(sessionID).isBusy
         return Composer(sessionID: sessionID,
                         agent: session.agent,
                         blocked: blocked,
                         isFocused: $composerFocused,
-                        placeholder: busy ? "Queue the next revision…" : "Describe what to design…",
+                        placeholder: composerPlaceholder(session),
                         inset: 12,
                         onOversizedPaste: attachPastedText,
                         onRecallUp: { runner.recallEarlier(sessionID, store: store) },
                         onRecallDown: { runner.recallLater(sessionID, store: store) },
+                        onSend: branchIfNeeded,
                         above: {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 SessionRunSettingsControls(sessionID: sessionID)
@@ -318,43 +532,116 @@ struct DesignView: View {
                         })
     }
 
+    private func composerPlaceholder(_ session: ChatSession) -> String {
+        if runner.state(sessionID).isBusy { return "Queue the next revision…" }
+        if let displayed = displayedRevision(in: session), displayed.id != liveRevisionID {
+            return "Start from v\(displayed.number)…"
+        }
+        if let live = liveRevision { return "Refine v\(live.number)…" }
+        return session.messages.isEmpty ? "Describe what to design…" : "Refine this design…"
+    }
+
+    // A prompt sent while an older version is on view starts from that version: its files
+    // go back on the live canvas before the turn begins. While a turn runs the prompt
+    // only queues, and rewriting the canvas under the agent would wreck its work.
+    private func branchIfNeeded() {
+        defer {
+            displayedRevisionID = nil
+            comparing = false
+        }
+        guard !runner.state(sessionID).isBusy,
+              let revision = displayedRevision, revision.id != liveRevisionID else { return }
+        switch store.restoreDesignRevision(revision.id, for: sessionID) {
+        case .success:
+            liveRevisionID = revision.id
+            store.append(ChatMessage(role: .system, text: "Started from \(revision.title)."),
+                         to: sessionID)
+        case .failure(let failure):
+            dialogs.show(.notice("Could not start from \(revision.title)",
+                                 message: failure.message))
+        }
+    }
+
     private func attachPastedText(_ text: String) {
         guard let attachment = Attachments.fromPastedText(text) else { return }
         runner.attach([attachment], to: sessionID)
         composerFocused = true
     }
 
+    // Questions from the agent, a held-open turn and a failed one all sit right above
+    // the composer, where the answer gets typed.
+    @ViewBuilder
+    private func turnNotices(_ session: ChatSession) -> some View {
+        let state = runner.state(sessionID)
+        let projectPath = store.workingDirectory(for: session) ?? ""
+        let question = runner.question(sessionID)
+        let waiting = state == .waiting && !waitNoticeDismissed
+            ? runner.waitingSince(sessionID) : nil
+        VStack(alignment: .leading, spacing: 10) {
+            if let request = question {
+                PermissionCard(request: request,
+                               workingDirectories: store.workingDirectories(for: session),
+                               projectPath: projectPath) { answer in
+                    runner.answer(request, with: answer,
+                                  sessionID: sessionID, store: store)
+                }
+                .id(request.id)
+            }
+
+            if let waitingSince = waiting {
+                WaitingNotice(since: waitingSince,
+                              tasks: runner.backgroundTasks(sessionID),
+                              agentTitle: session.agent.title,
+                              command: { session.shellCommand(for: $0) },
+                              onKeepWaiting: { waitNoticeDismissed = true },
+                              onEnd: { runner.endWait(sessionID) })
+            }
+
+            TurnEndActions(sessionID: sessionID, state: state)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, question != nil || waiting != nil || hasTurnEndAction(state) ? 10 : 0)
+        // A dismissed notice is dismissed for that wait only: the next one is a new turn
+        // parked on new tasks, and it has its own case to make.
+        .onChange(of: state) { _, state in
+            if state != .waiting { waitNoticeDismissed = false }
+        }
+    }
+
+    private func hasTurnEndAction(_ state: SessionState) -> Bool {
+        if case .failed = state { return true }
+        return runner.canContinueAfterStop(sessionID, store: store)
+    }
+
     // MARK: - Canvas
 
-    private func canvasPane(_ session: ChatSession, directory: URL,
-                            liveDirectory: URL) -> some View {
+    private func canvasColumn(_ session: ChatSession, directory: URL,
+                              liveDirectory: URL) -> some View {
         let implementation = store.implementationSessions(for: session.id).last
         let needsImplementationUpdate = implementation.map {
             designNeedsUpdate(session, implementation: $0, liveDirectory: liveDirectory)
         } ?? false
+        let busy = runner.state(sessionID).isBusy
+        let pair = comparing ? comparisonPair(session) : nil
         return VStack(spacing: 0) {
             DesignCanvasBar(canvas: canvas) {
-                Text("CANVAS")
-                    .font(.mono(10, .semibold))
-                    .kerning(1)
-                    .foregroundStyle(.secondary)
                 if canvas.revision != nil {
-                    StatusDot()
                     Text(canvas.selectedScreen?.path ?? "index.html")
                         .font(.mono(10.5))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                         .appTooltip(canvas.screenURL(in: directory)?.path ?? directory.path)
                 }
-            } tools: {
-                if !session.designRevisions.isEmpty {
-                    OptionMenu(value: displayedRevision?.title ?? "Live", matchWidth: false) {
-                        revisionMenu(session)
-                    }
-                    .fixedSize()
+                if let pair {
+                    MonoChip(text: "V\(pair.0.number) AND V\(pair.1.number)", size: 8.5,
+                             tint: Theme.accent)
+                } else if let displayed = displayedRevision {
+                    MonoChip(text: "VIEWING V\(displayed.number)", size: 8.5, tint: Theme.accent)
                 }
-
+            } tools: {
                 if canvas.revision != nil {
-                    if displayedRevision == nil {
+                    if displayedRevision == nil, pair == nil {
                         GlyphButton(icon: selectionEnabled ? "scope" : "cursorarrow", side: 28,
                                     active: selectionEnabled, tint: Theme.accent) {
                             selectionEnabled.toggle()
@@ -362,95 +649,126 @@ struct DesignView: View {
                         .appTooltip(selectionEnabled
                             ? "Stop selecting canvas elements"
                             : "Select an element to refine")
+                        .accessibilityLabel("Select an element to refine")
                     }
 
-                    if displayedRevision != nil {
-                        GlyphButton(icon: "rectangle.split.2x1", side: 28,
-                                    active: comparingWithLive, tint: Theme.accent) {
-                            comparingWithLive.toggle()
-                        }
-                        .appTooltip("Compare this revision with the live canvas")
-
-                        GlyphButton(icon: "arrow.uturn.backward", side: 28, tint: Theme.accent) {
-                            confirmRestore(session)
-                        }
-                        .appTooltip("Use this revision as the next direction")
-                    } else {
-                        GlyphButton(icon: "bookmark.fill", side: 28, tint: Theme.accent) {
-                            preparingHandoff = true
-                            snapshotRequest = DesignSnapshotRequest(purpose: .revision)
-                        }
-                        .disabled(preparingHandoff || runner.state(sessionID).isBusy)
-                        .appTooltip("Save a Design version")
-
-                        if let implementation {
-                            if onOpenImplementation == nil {
-                                ActionButton(title: "Build", tone: .outlined,
-                                             height: 28, size: 11,
-                                             icon: "arrow.right") {
-                                    openImplementation(implementation)
-                                }
-                            }
-
-                            if needsImplementationUpdate {
-                                ActionButton(
-                                    title: preparingHandoff ? "Preparing…" : "Update build",
-                                    tone: .green, height: 28, size: 11,
-                                    icon: preparingHandoff ? "hourglass" : "arrow.triangle.2.circlepath") {
-                                        requestImplementationSnapshot()
-                                    }
-                                    .disabled(preparingHandoff || runner.state(sessionID).isBusy)
-                            } else {
-                                MonoChip(text: "BUILD UP TO DATE", size: 8.5,
-                                         tint: Theme.accent)
-                            }
-                        } else {
-                            ActionButton(title: preparingHandoff ? "Preparing…" : "Implement",
-                                         tone: .green, height: 28, size: 11,
-                                         icon: preparingHandoff ? "hourglass" : "hammer.fill") {
-                                showImplementationDialog()
-                            }
-                            .disabled(preparingHandoff || runner.state(sessionID).isBusy)
-                        }
-                    }
-
-                    ActionButton(title: "Full Screen",
-                                 tone: designWindow.isOpen ? .sunken : .outlined,
-                                 height: 28, size: 11, icon: "macwindow") {
+                    GlyphButton(icon: "arrow.up.left.and.arrow.down.right", side: 28,
+                                active: designWindow.isOpen, tint: Theme.accent) {
                         openDesignWindow(session, directory: directory)
                     }
                     .appTooltip(designWindow.isOpen
                         ? "Bring design window to front"
                         : "Open design in a separate window")
+                    .accessibilityLabel("Full screen")
+
+                    if let implementation {
+                        if onOpenImplementation == nil {
+                            ActionButton(title: "Build", tone: .outlined,
+                                         height: 28, size: 11,
+                                         icon: "arrow.right") {
+                                openImplementation(implementation)
+                            }
+                        }
+
+                        if needsImplementationUpdate || displayedRevision != nil {
+                            ActionButton(
+                                title: preparingHandoff ? "Preparing…" : implementTitle("Update build"),
+                                tone: .green, height: 28, size: 11,
+                                icon: preparingHandoff ? "hourglass" : "arrow.triangle.2.circlepath") {
+                                    implement()
+                                }
+                                .disabled(preparingHandoff || busy)
+                        } else {
+                            MonoChip(text: "BUILD UP TO DATE", size: 8.5,
+                                     tint: Theme.accent)
+                        }
+                    } else {
+                        ActionButton(title: preparingHandoff ? "Preparing…" : implementTitle("Implement"),
+                                     tone: .green, height: 28, size: 11,
+                                     icon: preparingHandoff ? "hourglass" : "hammer.fill") {
+                            showImplementationDialog()
+                        }
+                        .disabled(preparingHandoff || busy)
+                    }
                 }
             }
 
-            if let revision = canvas.revision, let url = canvas.screenURL(in: directory) {
-                if comparingWithLive, displayedRevision != nil,
-                   let liveRevision = DesignArtifactRevision.read(liveDirectory),
-                   let liveURL = canvas.screenURL(in: liveDirectory) {
-                    HStack(spacing: 1) {
-                        labelledPreview("LIVE", url: liveURL, directory: liveDirectory,
-                                        revision: liveRevision, selectionEnabled: false)
-                        labelledPreview(displayedRevision?.title.uppercased() ?? "REVISION",
-                                        url: url, directory: directory,
-                                        revision: revision, selectionEnabled: false)
-                    }
-                } else {
-                    // The agent cannot see the canvas it draws into, so the canvas tells
-                    // it how much room there is. Only the single live preview reports:
-                    // the side-by-side comparison is a way of looking at the design, not
-                    // a width it has to work at.
-                    canvasPreview(url, directory: directory, revision: revision,
-                                  selectionEnabled: displayedRevision == nil && selectionEnabled,
-                                  onViewport: { runner.recordCanvasWidth($0, for: sessionID) })
+            ZStack(alignment: .top) {
+                canvasContent(session, directory: directory, pair: pair,
+                              liveDirectory: liveDirectory, busy: busy)
+                if busy, displayedRevision == nil, canvas.revision != nil {
+                    buildingBadge(session)
+                        .padding(.top, 10)
                 }
-            } else {
-                PaneMessage(icon: "rectangle.on.rectangle.angled",
-                            title: "Your design will appear here",
-                            detail: "Describe the first direction in the Design conversation.")
-                    .background(Theme.sunken)
             }
+
+            Divider().overlay(Theme.hairline)
+            turnNotices(session)
+            designComposer(session)
+        }
+    }
+
+    private func implementTitle(_ verb: String) -> String {
+        shownRevision.map { "\(verb) v\($0.number)" } ?? verb
+    }
+
+    private func buildingBadge(_ session: ChatSession) -> some View {
+        let next = (session.designRevisions.map(\.number).max() ?? 0) + 1
+        return HStack(spacing: 6) {
+            StateLight(tone: .running, size: 6)
+            Text("Building v\(next)")
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(Theme.card))
+        .overlay(Capsule().strokeBorder(Theme.border))
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func canvasContent(_ session: ChatSession, directory: URL,
+                               pair: (DesignRevision, DesignRevision)?,
+                               liveDirectory: URL, busy: Bool) -> some View {
+        if let pair {
+            let older = DesignArtifacts.materialsDirectory(pair.0, designDirectory: liveDirectory)
+            let newer = DesignArtifacts.materialsDirectory(pair.1, designDirectory: liveDirectory)
+            HStack(spacing: 1) {
+                comparedPreview(pair.0, directory: older)
+                comparedPreview(pair.1, directory: newer)
+            }
+        } else if let revision = canvas.revision, let url = canvas.screenURL(in: directory) {
+            // The agent cannot see the canvas it draws into, so the canvas tells it how
+            // much room there is. Only the live canvas reports: an older version is a
+            // way of looking back, not a width the agent has to work at.
+            canvasPreview(url, directory: directory, revision: revision,
+                          selectionEnabled: displayedRevision == nil && selectionEnabled,
+                          onViewport: displayedRevision == nil
+                              ? { runner.recordCanvasWidth($0, for: sessionID) } : nil)
+        } else if busy {
+            PaneMessage(icon: "paintbrush.pointed",
+                        title: "Building the first version",
+                        detail: "It appears here as soon as \(session.agent.title) writes it.")
+                .background(Theme.sunken)
+        } else {
+            PaneMessage(icon: "rectangle.on.rectangle.angled",
+                        title: "No design yet",
+                        detail: "Describe what to design in the box below.")
+                .background(Theme.sunken)
+        }
+    }
+
+    @ViewBuilder
+    private func comparedPreview(_ revision: DesignRevision, directory: URL) -> some View {
+        if let files = DesignArtifactRevision.read(directory),
+           let url = canvas.screenURL(in: directory) {
+            labelledPreview(revision.title.uppercased(), url: url, directory: directory,
+                            revision: files, selectionEnabled: false)
+        } else {
+            PaneMessage(icon: "exclamationmark.triangle",
+                        title: "\(revision.title) is missing",
+                        detail: "Its saved files could not be read.")
+                .background(Theme.sunken)
         }
     }
 
@@ -459,34 +777,8 @@ struct DesignView: View {
             title: session.title,
             content: DesignWindowView(canvas: canvas,
                                       directory: directory,
-                                      label: displayedRevision?.title ?? "Canvas",
+                                      label: shownRevision?.title ?? "Canvas",
                                       onClose: { designWindow.close() }))
-    }
-
-    private var displayedRevision: DesignRevision? {
-        guard let displayedRevisionID,
-              let session = store.session(sessionID) else { return nil }
-        return session.designRevisions.first { $0.id == displayedRevisionID }
-    }
-
-    private func revisionMenu(_ session: ChatSession) -> [MenuEntry] {
-        var entries: [MenuEntry] = [
-            .item("Live canvas", icon: "sparkles",
-                  checked: displayedRevisionID == nil) {
-                displayedRevisionID = nil
-                comparingWithLive = false
-            },
-            .separator,
-        ]
-        entries += session.designRevisions.reversed().map { revision in
-            .item(revision.title, icon: "clock.arrow.circlepath",
-                  checked: displayedRevisionID == revision.id,
-                  subtitle: revision.createdAt.formatted(date: .abbreviated, time: .shortened)) {
-                displayedRevisionID = revision.id
-                comparingWithLive = false
-            }
-        }
-        return entries
     }
 
     private func labelledPreview(_ label: String, url: URL, directory: URL,
@@ -536,26 +828,51 @@ struct DesignView: View {
         composerFocused = true
     }
 
-    private func showImplementationDialog() {
-        let draft = DesignImplementationDraft()
-        dialogs.show(Dialog(
-            title: "Implement this Design?",
-            message: "Add guidance if the canvas shows multiple options, or leave this blank to implement the Design as shown.",
-            content: AnyView(DesignImplementationContextEditor(draft: draft)),
-            actions: [
-                .init(label: "Implement", kind: .primary) {
-                    requestImplementationSnapshot(additionalContext: draft.text)
-                },
-                .init(label: "Cancel", kind: .cancel),
-            ],
-            width: 460))
+    // MARK: - Saving versions
+
+    // Everything that can change whether the live canvas still needs saving. The check
+    // runs again whenever one of these moves.
+    private struct VersionCheck: Equatable {
+        var busy: Bool
+        var canvas: DesignArtifactRevision?
+        var revisions: [UUID]
+        var displayed: UUID?
+        var comparing: Bool
+        var snapshotPending: Bool
+        var saving: Bool
     }
 
-    private func requestImplementationSnapshot(additionalContext: String? = nil) {
-        guard canvas.revision != nil else { return }
-        preparingHandoff = true
-        snapshotRequest = DesignSnapshotRequest(purpose: .handoff,
-                                                additionalContext: additionalContext)
+    private func versionCheck(_ session: ChatSession) -> VersionCheck {
+        VersionCheck(busy: runner.state(sessionID).isBusy,
+                     canvas: canvas.revision,
+                     revisions: session.designRevisions.map(\.id),
+                     displayed: displayedRevisionID,
+                     comparing: comparing,
+                     snapshotPending: snapshotRequest != nil,
+                     saving: savingVersion || preparingHandoff)
+    }
+
+    // Saves the live canvas as a version once a turn has left it in a state no version
+    // holds yet. Turns that change no files, such as a question or a plan, save nothing.
+    // The thumbnail is a picture of the canvas, so it waits until the live canvas is the
+    // one on view and has had a moment to load what the turn last wrote.
+    private func checkVersions(liveDirectory: URL) async {
+        guard let session = store.session(sessionID) else { return }
+        liveRevisionID = session.designRevisions
+            .sorted { $0.number > $1.number }
+            .first { DesignArtifacts.matchesLive($0, designDirectory: liveDirectory) }?.id
+
+        let check = versionCheck(session)
+        guard liveRevisionID == nil, !check.busy, !check.saving, !check.snapshotPending,
+              check.displayed == nil, !check.comparing,
+              let shown = check.canvas, shown == DesignArtifactRevision.read(liveDirectory),
+              canvas.screenURL(in: liveDirectory) != nil else { return }
+        do {
+            try await Task.sleep(for: .milliseconds(900))
+        } catch {
+            return
+        }
+        snapshotRequest = DesignSnapshotRequest(purpose: .revision)
     }
 
     private func receiveSnapshot(_ image: NSImage?, request: DesignSnapshotRequest) {
@@ -573,26 +890,60 @@ struct DesignView: View {
                                      additionalContext: request.additionalContext)
             }
         case .revision:
-            Task { await saveRevision(screenshot: image.flatMap(DesignArtifacts.pngData)) }
+            savingVersion = true
+            Task { await saveVersion(screenshot: image.flatMap(DesignArtifacts.pngData)) }
         }
     }
 
-    private func saveRevision(screenshot: Data?) async {
-        guard let session = store.session(sessionID) else {
-            preparingHandoff = false
+    private func saveVersion(screenshot: Data?) async {
+        defer { savingVersion = false }
+        guard let session = store.session(sessionID) else { return }
+        let source = await DesignHandoffLifecycle.sourceRevisions(for: session, store: store)
+        switch store.saveDesignRevision(sessionID, screenshot: screenshot,
+                                        sourceRevisions: source, promptID: latestPromptID) {
+        case .success(let revision):
+            liveRevisionID = revision.id
+        case .failure(let failure):
+            dialogs.show(.notice("Could not save the Design version", message: failure.message))
+        }
+    }
+
+    // MARK: - Implementation
+
+    private func showImplementationDialog() {
+        let draft = DesignImplementationDraft()
+        let title = shownRevision.map { "Implement \($0.title)?" } ?? "Implement this Design?"
+        dialogs.show(Dialog(
+            title: title,
+            message: "Add guidance if the canvas shows multiple options, or leave this blank to implement the Design as shown.",
+            content: AnyView(DesignImplementationContextEditor(draft: draft)),
+            actions: [
+                .init(label: "Implement", kind: .primary) {
+                    implement(additionalContext: draft.text)
+                },
+                .init(label: "Cancel", kind: .cancel),
+            ],
+            width: 460))
+    }
+
+    // Hands over the version on view. One already saved is approved as it is; a live
+    // canvas no version holds yet is saved first, with a fresh picture of it.
+    private func implement(additionalContext: String? = nil) {
+        if let revision = shownRevision {
+            preparingHandoff = true
+            switch store.approveDesignRevision(revision.id, for: sessionID) {
+            case .success(let approved):
+                handOver(approved, additionalContext: additionalContext)
+            case .failure(let failure):
+                preparingHandoff = false
+                dialogs.show(.notice("Could not prepare the Design", message: failure.message))
+            }
             return
         }
-        let source = await DesignHandoffLifecycle.sourceRevisions(for: session, store: store)
-        switch store.saveDesignRevision(
-            sessionID, screenshot: screenshot, sourceRevisions: source) {
-        case .success(let revision):
-            store.append(ChatMessage(role: .system,
-                                     text: "Saved \(revision.title)."),
-                         to: sessionID)
-        case .failure(let failure):
-            dialogs.show(.notice("Could not save the Design revision", message: failure.message))
-        }
-        preparingHandoff = false
+        guard canvas.revision != nil else { return }
+        preparingHandoff = true
+        snapshotRequest = DesignSnapshotRequest(purpose: .handoff,
+                                                additionalContext: additionalContext)
     }
 
     private func prepareHandoff(screenshot: Data?, additionalContext: String?) async {
@@ -602,32 +953,37 @@ struct DesignView: View {
         }
         let revisions = await DesignHandoffLifecycle.sourceRevisions(for: session, store: store)
         switch store.approveDesign(sessionID, screenshot: screenshot,
-                                   sourceRevisions: revisions) {
+                                   sourceRevisions: revisions, promptID: latestPromptID) {
         case .failure(let failure):
             preparingHandoff = false
             dialogs.show(.notice("Could not prepare the Design", message: failure.message))
         case .success(let revision):
-            preparingHandoff = false
-            if let implementation = store.implementationSessions(for: sessionID).last {
-                switch DesignHandoffLifecycle.sendLatestDesign(
-                    to: implementation.id, store: store, runner: runner) {
-                case .success:
-                    store.append(ChatMessage(
-                        role: .system,
-                        text: "Sent \(revision.title) to Build."),
-                        to: sessionID)
-                case .failure(let failure):
-                    dialogs.show(.notice(failure.title, message: failure.message))
-                }
-            } else {
-                switch DesignHandoffLifecycle.startImplementation(
-                    sessionID, revision: revision, additionalContext: additionalContext,
-                    store: store, runner: runner) {
-                case .success:
-                    onOpenImplementation?()
-                case .failure(let failure):
-                    dialogs.show(.notice(failure.title, message: failure.message))
-                }
+            liveRevisionID = revision.id
+            handOver(revision, additionalContext: additionalContext)
+        }
+    }
+
+    private func handOver(_ revision: DesignRevision, additionalContext: String?) {
+        preparingHandoff = false
+        if let implementation = store.implementationSessions(for: sessionID).last {
+            switch DesignHandoffLifecycle.sendLatestDesign(
+                to: implementation.id, store: store, runner: runner) {
+            case .success:
+                store.append(ChatMessage(
+                    role: .system,
+                    text: "Sent \(revision.title) to Build."),
+                    to: sessionID)
+            case .failure(let failure):
+                dialogs.show(.notice(failure.title, message: failure.message))
+            }
+        } else {
+            switch DesignHandoffLifecycle.startImplementation(
+                sessionID, revision: revision, additionalContext: additionalContext,
+                store: store, runner: runner) {
+            case .success:
+                onOpenImplementation?()
+            case .failure(let failure):
+                dialogs.show(.notice(failure.title, message: failure.message))
             }
         }
     }
@@ -652,23 +1008,57 @@ struct DesignView: View {
             store.selectSession(implementation.id)
         }
     }
+}
 
-    private func confirmRestore(_ session: ChatSession) {
-        guard let revision = displayedRevision else { return }
-        dialogs.show(.confirm(
-            "Use \(revision.title) as the next direction?",
-            message: "The live canvas is replaced with this saved revision. Its revision history is kept.",
-            action: "Use \(revision.title)", kind: .primary) {
-                switch store.restoreDesignRevision(revision.id, for: session.id) {
-                case .success:
-                    displayedRevisionID = nil
-                    comparingWithLive = false
-                case .failure(let failure):
-                    dialogs.show(.notice("Could not restore the Design", message: failure.message))
-                }
-            })
+// The quick starts under the first prompt. Each one fills the composer rather than
+// sending, so the rest of the request can be typed after it.
+private enum DesignStarter: CaseIterable {
+    case newScreen, reworkScreen, flow
+
+    var title: String {
+        switch self {
+        case .newScreen: "A new screen"
+        case .reworkScreen: "Rework a screen"
+        case .flow: "A flow across screens"
+        }
+    }
+
+    var prompt: String {
+        switch self {
+        case .newScreen: "A new screen for "
+        case .reworkScreen: "Rework the screen that "
+        case .flow: "A flow across screens for "
+        }
     }
 }
+
+// The picture a version saved of its canvas. Read off the main thread, since a full
+// canvas screenshot can run to a few megabytes.
+private struct DesignThumbnail: View {
+    let url: URL
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            Theme.sunken
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: "rectangle.on.rectangle.angled")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task(id: url) {
+            let url = url
+            let data = await Task.detached { try? Data(contentsOf: url) }.value
+            image = data.flatMap(NSImage.init(data:))
+        }
+    }
+}
+
 
 @MainActor
 @Observable
@@ -876,7 +1266,7 @@ struct DesignCanvasBar<Leading: View, Tools: View>: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 42)
+        .frame(height: DesignSplitLayout.barHeight)
         .background(Theme.card)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.hairline).frame(height: 1)
@@ -885,11 +1275,15 @@ struct DesignCanvasBar<Leading: View, Tools: View>: View {
 }
 
 enum DesignSplitLayout {
-    static let defaultConversationWidth: CGFloat = 340
+    static let defaultConversationWidth: CGFloat = 300
     static let minimumConversationWidth: CGFloat = 280
     static let minimumCanvasWidth: CGFloat = 320
     static let dividerWidth: CGFloat = 1
     static let handleWidth: CGFloat = 9
+    // The versions column folded down to its rail, which leaves the canvas the pane.
+    static let collapsedWidth: CGFloat = 44
+    // The versions header and the canvas bar share one height so they read as one strip.
+    static let barHeight: CGFloat = 42
 
     static func conversationWidth(_ proposedWidth: CGFloat,
                                   availableWidth: CGFloat) -> CGFloat {
