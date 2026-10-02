@@ -147,42 +147,28 @@ enum PromptSuggestion {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = searchPath
 
-        let collected = Collector(agent: agent)
+        // A line handler keeps stdin open for replies. Codex drains stdin before
+        // starting even with a prompt argument, so collect its output after exit.
         guard let output = try? await CommandRunner.run(
             executable: path,
             arguments: arguments(for: agent, prompt: prompt),
             currentDirectory: URL(fileURLWithPath: workingDirectory),
             environment: environment,
-            outputLineHandler: collected.receive,
             timeout: .seconds(45),
             outputByteLimit: 262_144
-        ), output.succeeded else { return nil }
-        return cleaned(collected.text)
-    }
+        ), output.succeeded, !output.outputTruncated else { return nil }
 
-    // The three CLIs answer in three dialects, all of which the app already reads, so the
-    // run is folded onto the same events a turn produces and the text is taken off those.
-    private final class Collector: @unchecked Sendable {
-        private let lock = NSLock()
-        private let agent: AgentKind
-        private let copilot = CopilotStream()
-        private var parts: [String] = []
-
-        init(agent: AgentKind) { self.agent = agent }
-
-        var text: String { lock.withLock { parts.joined(separator: " ") } }
-
-        func receive(_ line: String) -> CommandRunner.OutputLineAction {
+        let copilot = CopilotStream()
+        var parts: [String] = []
+        for line in output.output.split(separator: "\n") {
             let events = switch agent {
-            case .claudeCode: StreamEvent.parse(line)
-            case .codex: StreamEvent.parseCodex(line)
-            case .copilot: copilot.parse(line)
+            case .claudeCode: StreamEvent.parse(String(line))
+            case .codex: StreamEvent.parseCodex(String(line))
+            case .copilot: copilot.parse(String(line))
             }
-            lock.withLock {
-                for case .text(let text) in events { parts.append(text) }
-            }
-            return .none
+            for case .text(let text) in events { parts.append(text) }
         }
+        return cleaned(parts.joined(separator: " "))
     }
 }
 
