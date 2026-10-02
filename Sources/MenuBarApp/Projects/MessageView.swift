@@ -25,6 +25,11 @@ struct MessageView: View, Equatable {
     }
 
     var body: some View {
+        content
+            .environment(\.transcriptMessageID, message.id)
+    }
+
+    @ViewBuilder private var content: some View {
         switch message.role {
         case .user:
             if let promptMenu {
@@ -164,6 +169,8 @@ struct MessageView: View, Equatable {
 private struct InstructionBubble: View {
     let text: String
     @State private var expanded = false
+    @Environment(\.transcriptFind) private var find
+    @Environment(\.transcriptMessageID) private var messageID
 
     var body: some View {
         HStack(spacing: 0) {
@@ -192,6 +199,9 @@ private struct InstructionBubble: View {
                      border: Theme.secret.opacity(0.30))
         }
         .smoothlyResizes(when: expanded)
+        .onChange(of: find?.reveals(text, in: messageID) == true, initial: true) { _, reveals in
+            if reveals { expanded = true }
+        }
     }
 }
 
@@ -200,6 +210,8 @@ private struct InstructionBubble: View {
 private struct ThinkingBlock: View {
     let text: String
     @State private var expanded = false
+    @Environment(\.transcriptFind) private var find
+    @Environment(\.transcriptMessageID) private var messageID
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -228,6 +240,9 @@ private struct ThinkingBlock: View {
         .padding(.trailing, 32)
         .frame(maxWidth: .infinity, alignment: .leading)
         .smoothlyResizes(when: expanded)
+        .onChange(of: find?.reveals(text, in: messageID) == true, initial: true) { _, reveals in
+            if reveals { expanded = true }
+        }
     }
 
     private var firstLine: String {
