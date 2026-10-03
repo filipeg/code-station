@@ -303,15 +303,6 @@ final class DispatchRunner {
               data.count <= 256 * 1024,
               contentType?.localizedCaseInsensitiveContains("json") == true
         else { return text }
-        return prettyJSON(data) ?? text
-    }
-
-    private static func prettyJSON(_ data: Data) -> String? {
-        guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
-              let pretty = try? JSONSerialization.data(
-                withJSONObject: object,
-                options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
-        else { return nil }
-        return String(data: pretty, encoding: .utf8)
+        return JSONFormat.pretty(text) ?? text
     }
 }
