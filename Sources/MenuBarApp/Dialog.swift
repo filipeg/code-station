@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // A question asked in the middle of the window, drawn by the app rather than by AppKit.
@@ -18,6 +19,18 @@ struct Dialog: Identifiable {
         var isEnabled: () -> Bool = { true }
     }
 
+    struct Impact {
+        struct Row {
+            let title: String
+            let detail: String
+            var kept = false
+        }
+
+        let projectName: String
+        let rows: [Row]
+        let warning: String?
+    }
+
     let id = UUID()
     let title: String
     var message: String?
@@ -28,6 +41,7 @@ struct Dialog: Identifiable {
     // Runs when the dialog is dismissed with escape or a click outside it.
     var onCancel: () -> Void = {}
     var width: CGFloat = 340
+    var impact: Impact?
 }
 
 extension Dialog {
@@ -56,7 +70,23 @@ extension Dialog {
 final class DialogPresenter {
     private(set) var current: Dialog?
 
-    func show(_ dialog: Dialog) { current = dialog }
+    private weak var previousResponder: NSResponder?
+    private weak var presentingWindow: NSWindow?
+
+    func show(_ dialog: Dialog) {
+        if current == nil, dialog.impact != nil {
+            presentingWindow = NSApp?.keyWindow
+            previousResponder = presentingWindow?.firstResponder
+        }
+        current = dialog
+    }
+
+    func restoreFocus() {
+        guard current == nil, let previousResponder else { return }
+        presentingWindow?.makeFirstResponder(previousResponder)
+        self.previousResponder = nil
+        presentingWindow = nil
+    }
 
     func dismiss() {
         let cancel = current?.onCancel
@@ -83,10 +113,19 @@ struct DialogHost: View {
                     .ignoresSafeArea()
                     .onTapGesture { presenter.dismiss() }
 
-                card(dialog)
-                    .frame(width: dialog.width)
+                if dialog.impact != nil {
+                    GeometryReader { geometry in
+                        ImpactDialogCard(dialog: dialog, maxHeight: max(0, geometry.size.height - 32))
+                            .frame(width: min(dialog.width, max(0, geometry.size.width - 32)))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                     .id(dialog.id)
-                    .transition(.fadeIn)
+                } else {
+                    card(dialog)
+                        .frame(width: dialog.width)
+                        .id(dialog.id)
+                        .transition(.fadeIn)
+                }
             }
             .transition(.fadeIn)
             .smoothlyResizes(when: dialog.id)
@@ -150,5 +189,106 @@ struct DialogHost: View {
         case .cancel: .cancelAction
         case .plain: nil
         }
+    }
+}
+
+private struct ImpactDialogCard: View {
+    let dialog: Dialog
+    let maxHeight: CGFloat
+    @Environment(DialogPresenter.self) private var presenter
+    @FocusState private var focusedAction: UUID?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            MenuContentScrollView(maxHeight: max(0, maxHeight - 76)) {
+                VStack(alignment: .leading, spacing: 20) {
+                    if let impact = dialog.impact {
+                        HStack(spacing: 10) {
+                            ProjectTileView(name: impact.projectName,
+                                            tint: Theme.projectTint(for: impact.projectName), side: 29)
+                                .accessibilityHidden(true)
+                            Text(impact.projectName)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(dialog.title)
+                                .font(.serif(26, .regular))
+                                .accessibilityAddTraits(.isHeader)
+                            if let message = dialog.message {
+                                Text(message)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        VStack(spacing: 0) {
+                            ForEach(Array(impact.rows.enumerated()), id: \.offset) { _, row in
+                                Rectangle().fill(Theme.border).frame(height: 1)
+                                HStack(alignment: .top, spacing: 12) {
+                                    Image(systemName: row.kept ? "checkmark" : "minus")
+                                        .foregroundStyle(row.kept ? Theme.accent : Theme.deletion)
+                                        .frame(width: 20)
+                                        .accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(row.title).font(.system(size: 13, weight: .medium))
+                                        Text(row.detail)
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.vertical, 17)
+                                .accessibilityElement(children: .combine)
+                            }
+                            Rectangle().fill(Theme.border).frame(height: 1)
+                        }
+                        if let warning = impact.warning {
+                            Label(warning, systemImage: "info.circle")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.deletion)
+                        }
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(28)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            HStack(spacing: 9) {
+                Spacer(minLength: 0)
+                ForEach(dialog.actions.reversed()) { action in
+                    ActionButton(title: action.label,
+                                 tone: action.kind == .destructive ? .danger : .sunken,
+                                 height: 36, size: 12,
+                                 keyboardShortcut: action.kind == .cancel ? .cancelAction : .defaultAction) {
+                        presenter.run(action)
+                    }
+                    .disabled(!action.isEnabled())
+                    .focused($focusedAction, equals: action.id)
+                    .overlay(RoundedRectangle(cornerRadius: 9)
+                        .stroke(focusedAction == action.id ? Theme.accent : .clear, lineWidth: 2)
+                        .padding(-3))
+                }
+            }
+            .padding(20)
+            .background(Theme.field)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .floatingCard(cornerRadius: 18)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
+        .onKeyPress(keys: [.tab]) { press in
+            let actions = dialog.actions.reversed().filter { $0.isEnabled() }
+            guard !actions.isEmpty else { return .handled }
+            let index = actions.firstIndex { $0.id == focusedAction } ?? 0
+            let step = press.modifiers.contains(.shift) ? -1 : 1
+            focusedAction = actions[(index + step + actions.count) % actions.count].id
+            return .handled
+        }
+        .onExitCommand { presenter.dismiss() }
+        .onAppear {
+            focusedAction = dialog.actions.first { $0.kind == .cancel }?.id
+        }
+        .onDisappear { presenter.restoreFocus() }
     }
 }

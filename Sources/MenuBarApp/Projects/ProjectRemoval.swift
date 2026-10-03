@@ -13,7 +13,7 @@ enum ProjectRemoval {
     static func confirm(_ project: Project, in store: ProjectStore, runner: SessionRunner,
                         shortcuts: ShortcutStore, dialogs: DialogPresenter,
                         worktrees: WorktreeOperations = .live) {
-        dialogs.show(confirmation(for: project, in: store) {
+        dialogs.show(confirmation(for: project, in: store, shortcuts: shortcuts) {
             Task {
                 if case .failure(let failure) = await run(project, in: store, runner: runner,
                                                           shortcuts: shortcuts,
@@ -35,22 +35,49 @@ enum ProjectRemoval {
     // A task's folder was created by the app inside its own support directory, so deleting
     // the task takes the folder with it. A folder the user chose always stays.
     static func confirmation(for project: Project, in store: ProjectStore,
+                             shortcuts: ShortcutStore? = nil,
                              onConfirm: @escaping () -> Void) -> Dialog {
         let sessions = sessions(using: project.id, in: store)
         let count = sessions.count
         let designs = sessions.count { store.hasDesignArtifacts(for: $0) }
         let isTask = project.kind == .adHoc
-        var message = isTask
-            ? "This drops its \(counted(count, "run")) and deletes the task's folder, including any files the runs left in it."
-            : "This drops \(counted(count, "session")) that use it and removes their worktrees. It is also removed from every workspace. The folder itself stays on disk."
+        if !isTask {
+            let worktreeCount = sessions.reduce(0) {
+                $0 + store.checkoutProjects(for: $1).compactMap(\.worktreePath).count
+            }
+            let saved = shortcuts?.shortcuts.filter { $0.projectID == project.id } ?? []
+            var rows = [Dialog.Impact.Row(
+                title: "\(counted(count, "session")) and \(counted(worktreeCount, "worktree"))",
+                detail: count == 0 ? "No sessions or worktrees to remove."
+                    : "Session history is removed from Code Station."
+                        + (worktreeCount > 0 ? " Worktrees are removed from disk." : ""))]
+            if !saved.isEmpty {
+                rows.append(.init(title: counted(saved.count, "saved shortcut"),
+                                  detail: "Project commands and prompts are permanently removed."))
+            }
+            if designs > 0 {
+                rows.append(.init(title: "Generated Design files",
+                                  detail: "Permanently removed from \(counted(designs, "session"))."))
+            }
+            rows.append(.init(title: "Original project folder stays",
+                              detail: project.collapsedPath, kept: true))
+            var dialog = Dialog.confirm("Remove \(project.name)?",
+                                        message: "This project will leave Code Station and every workspace it belongs to.",
+                                        action: "Remove project", handler: onConfirm)
+            dialog.width = 500
+            dialog.impact = .init(projectName: project.name, rows: rows,
+                                  warning: count > 0 ? "Session history cannot be restored." : nil)
+            return dialog
+        }
+        var message = "This drops its \(counted(count, "run")) and deletes the task's folder, including any files the runs left in it."
         if designs > 0 {
             message += designs == 1
                 ? " One session contains generated Design files that are permanently removed."
                 : " \(designs) sessions contain generated Design files that are permanently removed."
         }
-        return .confirm(isTask ? "Delete \(project.name)?" : "Remove \(project.name)?",
+        return .confirm("Delete \(project.name)?",
                         message: message,
-                        action: isTask ? "Delete task" : "Remove project", handler: onConfirm)
+                        action: "Delete task", handler: onConfirm)
     }
 
     // Sessions first, project last: a project dropped while one of its sessions survived
