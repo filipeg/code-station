@@ -17,6 +17,7 @@ struct DesignView: View {
     @State private var composerFocused = false
     @FocusState private var conversationToggleFocused: Bool
     @State private var conversationExpanded = false
+    @State private var historyHidden = false
     @State private var hasOpenedConversation = false
     @State private var transcriptAtBottom = true
     @State private var transcriptPosition = ScrollPosition(edge: .bottom)
@@ -63,7 +64,7 @@ struct DesignView: View {
 
     private func floatingConversation(_ session: ChatSession, size: CGSize) -> some View {
         let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded,
-                                                      composerHeight: composerHeight,
+                                                      historyHidden: historyHidden, composerHeight: composerHeight,
                                                       transcriptHeight: transcriptHeight)
         let footerHeight = min(composerHeight, max(0, panelSize.height - DesignConversationLayout.headerHeight))
         let needsYou = runner.question(sessionID) != nil || runner.waitIsStale(sessionID)
@@ -72,6 +73,7 @@ struct DesignView: View {
             HStack(spacing: 0) {
                 Button {
                     conversationExpanded.toggle()
+                    historyHidden = false
                 } label: {
                     HStack(spacing: 9) {
                         Image(systemName: "bubble.left")
@@ -102,6 +104,7 @@ struct DesignView: View {
                 .focusEffectDisabled()
                 .onKeyPress(keys: [.space, .return]) { _ in
                     conversationExpanded.toggle()
+                    historyHidden = false
                     return .handled
                 }
                 .overlay {
@@ -118,8 +121,10 @@ struct DesignView: View {
 
             transcript(session, width: panelSize.width)
                 .frame(width: panelSize.width,
-                       height: max(0, panelSize.height - DesignConversationLayout.headerHeight - footerHeight))
+                       height: historyHidden ? 0 : max(0, panelSize.height - DesignConversationLayout.headerHeight - footerHeight))
                 .clipped()
+                .allowsHitTesting(!historyHidden)
+                .accessibilityHidden(historyHidden)
             Divider().overlay(Theme.hairline)
             ScrollView {
                 VStack(spacing: 0) {
@@ -144,18 +149,26 @@ struct DesignView: View {
         .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 8)
         .background(DesignConversationDismissal(
             expanded: conversationExpanded,
+            historyHidden: historyHidden,
+            footerHeight: footerHeight,
             enabled: dialogs.current == nil && !menus.isOpen,
             collapse: { keyboard in
                 conversationExpanded = false
+                // A press outside folds the panel all the way down to the composer, so the
+                // canvas gets back as much room as it can. Escape only steps back one level.
                 if keyboard {
                     composerFocused = false
                     conversationToggleFocused = true
+                } else {
+                    historyHidden = true
                 }
             },
             expand: {
                 conversationExpanded = true
+                historyHidden = false
             }))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: historyHidden)
     }
 
     private func transcript(_ session: ChatSession, width: CGFloat) -> some View {
@@ -227,7 +240,7 @@ struct DesignView: View {
                 transcriptAtBottom = atBottom
             }
             .onChange(of: transcriptShape(session)) {
-                if transcriptAtBottom {
+                if !historyHidden && transcriptAtBottom {
                     proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
                 }
             }
@@ -311,6 +324,7 @@ struct DesignView: View {
                         onOversizedPaste: attachPastedText,
                         onRecallUp: { runner.recallEarlier(sessionID, store: store) },
                         onRecallDown: { runner.recallLater(sessionID, store: store) },
+                        onSend: { historyHidden = false },
                         above: {
                             let queued = runner.queued(sessionID).count
                             if queued > 0 {

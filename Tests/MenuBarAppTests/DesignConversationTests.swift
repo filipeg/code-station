@@ -8,14 +8,18 @@ struct DesignConversationLayoutTests {
         for workspace in [CGSize(width: 1200, height: 800), CGSize(width: 480, height: 600),
                           CGSize(width: 280, height: 120), .zero] {
             for expanded in [false, true] {
-                let size = DesignConversationLayout.size(in: workspace, expanded: expanded)
-                let inset = DesignConversationLayout.inset(in: workspace)
-                #expect(size.width >= 0 && size.height >= 0)
-                #expect(size.width + inset * 2 <= workspace.width)
-                #expect(size.height + inset * 2 <= workspace.height)
+                for hidden in [false, true] {
+                    let size = DesignConversationLayout.size(in: workspace, expanded: expanded, historyHidden: hidden)
+                    let inset = DesignConversationLayout.inset(in: workspace)
+                    #expect(size.width >= 0 && size.height >= 0)
+                    #expect(size.width + inset * 2 <= workspace.width)
+                    #expect(size.height + inset * 2 <= workspace.height)
+                }
             }
         }
         let workspace = CGSize(width: 1200, height: 800)
+        #expect(DesignConversationLayout.size(in: workspace, expanded: false, historyHidden: true, composerHeight: 124)
+                == CGSize(width: 660, height: 177))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false)
                 == CGSize(width: 660, height: 326))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false, composerHeight: 167, transcriptHeight: 60)
@@ -53,20 +57,27 @@ struct DesignConversationDismissalTests {
         #expect(collapses == [false])
         observer.expanded = false
         #expect(observer.handle(outside, frontmost: window) === outside)
-        #expect(collapses == [false])
+        #expect(collapses == [false, false])
+        observer.historyHidden = true
+        #expect(observer.handle(outside, frontmost: window) === outside)
+        #expect(collapses == [false, false])
         observer.expanded = true
+        #expect(observer.handle(outside, frontmost: window) === outside)
+        #expect(collapses == [false, false, false])
+        collapses = []
         observer.isHidden = true
         #expect(observer.handle(outside, frontmost: window) === outside)
-        #expect(collapses == [false])
+        #expect(collapses.isEmpty)
     }
 
-    @Test func pressesOnTheFoldedPanelBodyExpandItButNotOnTheHeaderOrOutside() throws {
+    @Test func pressesOnTheFoldedTranscriptExpandItButNotOnTheHeaderComposerOrOutside() throws {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         let observer = DesignConversationDismissal.ObserverView(frame: CGRect(x: 20, y: 20, width: 405, height: 144))
         window.contentView?.addSubview(observer)
         defer { observer.stop() }
         var expands = 0
+        observer.footerHeight = 50
         observer.expand = { expands += 1 }
         func click(_ point: CGPoint) throws -> NSEvent {
             try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: point,
@@ -76,8 +87,10 @@ struct DesignConversationDismissalTests {
         let header = try click(CGPoint(x: 100, y: 150))
         #expect(observer.handle(header, frontmost: window) === header)
         _ = observer.handle(try click(CGPoint(x: 600, y: 400)), frontmost: window)
+        let composer = try click(CGPoint(x: 100, y: 40))
+        #expect(observer.handle(composer, frontmost: window) === composer)
         #expect(expands == 0)
-        let body = try click(CGPoint(x: 100, y: 60))
+        let body = try click(CGPoint(x: 100, y: 100))
         #expect(observer.handle(body, frontmost: window) === body)
         #expect(expands == 1)
         observer.enabled = false
@@ -204,6 +217,17 @@ struct DesignConversationViewTests {
         try await settle()
         #expect(!observer.expanded)
         #expect(observer.bounds.height == 326)
+        let outside = try #require(NSEvent.mouseEvent(with: .leftMouseDown,
+            location: CGPoint(x: canvasFrame.minX + 20, y: canvasFrame.maxY - 20),
+            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        #expect(observer.handle(outside, frontmost: window) === outside)
+        try await settle()
+        #expect(!observer.expanded)
+        #expect(observer.historyHidden)
+        let hiddenComposerFrame = composer.convert(composer.bounds, to: nil)
+        let foldedFrame = observer.convert(observer.bounds, to: nil)
+        #expect(foldedFrame.minY < hiddenComposerFrame.minY - 20 && hiddenComposerFrame.minY - foldedFrame.minY < 70)
         #expect(runner.draft(session.id).text == "Keep this draft")
         #expect(runner.draft(session.id).attachments == [attachment])
         #expect(descendants(hosting.view).contains { $0 === composer })
