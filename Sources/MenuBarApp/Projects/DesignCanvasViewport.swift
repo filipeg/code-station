@@ -117,7 +117,10 @@ final class DesignCanvasViewport: NSView {
             overflowWidth = width
             changed = true
         }
-        if (screen?.height ?? 0) <= 0, height.isFinite, height > viewport.contentSize.height + 2 {
+        // A declared width is exact because it picks the design's breakpoint, but a
+        // declared height is only the first screenful. Content that runs past it
+        // would otherwise be cut off, since the canvas takes the scroll wheel.
+        if height.isFinite, height > viewport.contentSize.height + 2 {
             overflowHeight = height
             changed = true
         }
@@ -128,8 +131,8 @@ final class DesignCanvasViewport: NSView {
         super.layout()
         let width = screen?.width.flatMap { $0 > 0 ? CGFloat($0) : nil }
             ?? max(bounds.width, overflowWidth ?? 0)
-        let height = screen?.height.flatMap { $0 > 0 ? CGFloat($0) : nil }
-            ?? max(bounds.height, overflowHeight ?? 0)
+        let height = max(screen?.height.flatMap { $0 > 0 ? CGFloat($0) : nil } ?? bounds.height,
+                         overflowHeight ?? 0)
         viewport.resize(to: bounds.size,
                         contentSize: Self.boundedContentSize(CGSize(width: width, height: height)))
         applyViewport()

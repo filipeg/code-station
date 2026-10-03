@@ -174,6 +174,21 @@ struct DesignWebViewportTests {
         #expect(pane.view.viewport.isFitted)
     }
 
+    @Test func pageTallerThanItsDeclaredScreenGrowsDownwardButKeepsItsWidth() async throws {
+        let pane = Pane()
+        defer { pane.close() }
+        try await pane.load("""
+            <!doctype html><style>
+            body { margin: 0; }
+            main { width: 100%; height: 1400px; }
+            </style><main>Long page</main>
+            """)
+        try await pane.settle()
+        #expect(pane.view.viewport.contentSize == CGSize(width: 1440, height: 1400))
+        #expect(try await pane.webView.evaluateJavaScript("window.innerWidth") as? Int == 1440)
+        #expect(try await pane.webView.evaluateJavaScript("window.innerHeight") as? Int == 1400)
+    }
+
     @Test func zoomingOutPreservesTextSizeAndWrappingWithinTheArtboard() async throws {
         let pane = Pane()
         defer { pane.close() }
