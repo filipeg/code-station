@@ -6,8 +6,8 @@ import SwiftUI
 // what you want when the agent names a file you have never opened.
 //
 // A text file opens straight into an editor: there is no read mode to leave first, and
-// nothing is written until Save. The tree can copy, paste, rename and move items to the
-// Trash, but it never creates anything.
+// nothing is written until Save. The tree itself can create, copy, paste, rename and move
+// items to the Trash.
 // Says that a file being read has taken Cmd+F. It travels up to the window so the sidebar
 // can stop naming that stroke as the way into its own filter while the file answers for it.
 struct FileFindShortcutKey: PreferenceKey {
@@ -182,6 +182,13 @@ struct ExplorerView: View {
                 .font(.system(size: 12))
                 .onChange(of: showHidden) { Task { await reopenFolders() } }
 
+            headerIcon("doc.badge.plus", tooltip: "New file") {
+                create(folder: false, in: newItemDestination())
+            }
+            headerIcon("folder.badge.plus", tooltip: "New folder") {
+                create(folder: true, in: newItemDestination())
+            }
+
             Button {
                 Task { await reopenFolders() }
             } label: {
@@ -194,6 +201,18 @@ struct ExplorerView: View {
         }
         .padding(.horizontal, 20)
         .headerBand(height: Theme.subHeaderHeight)
+    }
+
+    private func headerIcon(_ symbol: String, tooltip: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverLift(amount: Motion.smallLift)
+        .foregroundStyle(Theme.accent)
+        .appTooltip(tooltip)
     }
 
     // MARK: - Tree
@@ -313,13 +332,17 @@ struct ExplorerView: View {
         .buttonStyle(.plain)
         .hoverFill(cornerRadius: 6)
         .appContextMenu {
-            [.item("Copy") { copy(node) },
-             .item("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) },
-             .item("Open with default app") { NSWorkspace.shared.open(node.url) },
-             .item("Copy Path") { Pasteboard.copy(node.path) },
-             .separator,
-             .item("Rename…") { startRename(node) },
-             .item("Move to Trash", kind: .destructive) { confirmTrash(node) }]
+            let folder = node.isDirectory ? node.url : node.url.deletingLastPathComponent()
+            return [.item("New File") { create(folder: false, in: folder) },
+                    .item("New Folder") { create(folder: true, in: folder) },
+                    .separator,
+                    .item("Copy") { copy(node) },
+                    .item("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) },
+                    .item("Open with default app") { NSWorkspace.shared.open(node.url) },
+                    .item("Copy Path") { Pasteboard.copy(node.path) },
+                    .separator,
+                    .item("Rename…") { startRename(node) },
+                    .item("Move to Trash", kind: .destructive) { confirmTrash(node) }]
         }
     }
 
@@ -748,6 +771,36 @@ struct ExplorerView: View {
                 loadedAt = nil
             }
             await load(node.url.deletingLastPathComponent().path)
+        }
+    }
+
+    // Next to what is selected: inside it when it is a folder, beside it when it is a file.
+    private func newItemDestination() -> URL {
+        guard let selected else { return rootURL }
+        return selected.isDirectory ? selected.url : selected.url.deletingLastPathComponent()
+    }
+
+    private func create(folder: Bool, in directory: URL) {
+        let rootAtStart = root
+        Task {
+            switch await FileTree.create(folder: folder, in: directory) {
+            case .failed(let failure):
+                dialogs.show(.notice(folder ? "Could not create a folder" : "Could not create a file",
+                                     message: failure))
+            case .created(let url):
+                guard root == rootAtStart else { return }
+                for path in FileTree.ancestorDirectories(of: url, beneath: rootURL) {
+                    expanded.insert(path)
+                    if children[path] == nil { await load(path) }
+                }
+                await load(directory.path)
+                guard let node = children[directory.path]?.first(where: { $0.path == url.path })
+                else { return }
+                // A new file opens at once, ready to type into. With unsaved edits in the
+                // pane it is only named, so the edits are not put at risk.
+                if !dirty { select(node) }
+                startRename(node)
+            }
         }
     }
 
