@@ -9,7 +9,7 @@ struct DesignConversationLayoutTests {
                           CGSize(width: 280, height: 120), .zero] {
             for expanded in [false, true] {
                 for hidden in [false, true] {
-                    let size = DesignConversationLayout.size(in: workspace, expanded: expanded, historyHidden: hidden)
+                    let size = DesignConversationLayout.size(in: workspace, expanded: expanded, minimized: hidden)
                     let inset = DesignConversationLayout.inset(in: workspace)
                     #expect(size.width >= 0 && size.height >= 0)
                     #expect(size.width + inset * 2 <= workspace.width)
@@ -18,8 +18,10 @@ struct DesignConversationLayoutTests {
             }
         }
         let workspace = CGSize(width: 1200, height: 800)
-        #expect(DesignConversationLayout.size(in: workspace, expanded: false, historyHidden: true, composerHeight: 124)
-                == CGSize(width: 660, height: 177))
+        #expect(DesignConversationLayout.size(in: workspace, expanded: true, minimized: true)
+                == DesignConversationLayout.minimizedSize)
+        #expect(DesignConversationLayout.size(in: CGSize(width: 180, height: 600), expanded: false, minimized: true)
+                == CGSize(width: 156, height: 56))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false)
                 == CGSize(width: 660, height: 326))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false, composerHeight: 167, transcriptHeight: 60)
@@ -58,13 +60,13 @@ struct DesignConversationDismissalTests {
         observer.expanded = false
         #expect(observer.handle(outside, frontmost: window) === outside)
         #expect(collapses == [false, false])
-        observer.historyHidden = true
+        observer.minimized = true
         #expect(observer.handle(outside, frontmost: window) === outside)
+        #expect(observer.handle(inside, frontmost: window) === inside)
         #expect(collapses == [false, false])
-        observer.expanded = true
-        #expect(observer.handle(outside, frontmost: window) === outside)
-        #expect(collapses == [false, false, false])
+        observer.minimized = false
         collapses = []
+        observer.expanded = true
         observer.isHidden = true
         #expect(observer.handle(outside, frontmost: window) === outside)
         #expect(collapses.isEmpty)
@@ -224,13 +226,18 @@ struct DesignConversationViewTests {
         #expect(observer.handle(outside, frontmost: window) === outside)
         try await settle()
         #expect(!observer.expanded)
-        #expect(observer.historyHidden)
-        let hiddenComposerFrame = composer.convert(composer.bounds, to: nil)
-        let foldedFrame = observer.convert(observer.bounds, to: nil)
-        #expect(foldedFrame.minY < hiddenComposerFrame.minY - 20 && hiddenComposerFrame.minY - foldedFrame.minY < 70)
+        #expect(observer.minimized)
+        #expect(observer.bounds.size == DesignConversationLayout.minimizedSize)
+        #expect(window.firstResponder !== composer)
+        #expect(descendants(hosting.view).contains { $0 === composer })
+        let tab = observer.convert(observer.bounds, to: nil)
+        try click(CGPoint(x: tab.midX, y: tab.midY))
+        try await settle()
+        #expect(!observer.minimized)
+        #expect(!observer.expanded)
+        #expect(observer.bounds.height == 326)
         #expect(runner.draft(session.id).text == "Keep this draft")
         #expect(runner.draft(session.id).attachments == [attachment])
-        #expect(descendants(hosting.view).contains { $0 === composer })
         for width: CGFloat in [480, 700, 1000] {
             window.setContentSize(CGSize(width: width, height: 800))
             try await settle()

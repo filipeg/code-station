@@ -17,7 +17,7 @@ struct DesignView: View {
     @State private var composerFocused = false
     @FocusState private var conversationToggleFocused: Bool
     @State private var conversationExpanded = false
-    @State private var historyHidden = false
+    @State private var conversationMinimized = false
     @State private var hasOpenedConversation = false
     @State private var transcriptAtBottom = true
     @State private var transcriptPosition = ScrollPosition(edge: .bottom)
@@ -64,7 +64,7 @@ struct DesignView: View {
 
     private func floatingConversation(_ session: ChatSession, size: CGSize) -> some View {
         let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded,
-                                                      historyHidden: historyHidden, composerHeight: composerHeight,
+                                                      minimized: conversationMinimized, composerHeight: composerHeight,
                                                       transcriptHeight: transcriptHeight)
         let footerHeight = min(composerHeight, max(0, panelSize.height - DesignConversationLayout.headerHeight))
         let needsYou = runner.question(sessionID) != nil || runner.waitIsStale(sessionID)
@@ -73,7 +73,6 @@ struct DesignView: View {
             HStack(spacing: 0) {
                 Button {
                     conversationExpanded.toggle()
-                    historyHidden = false
                 } label: {
                     HStack(spacing: 9) {
                         Image(systemName: "bubble.left")
@@ -104,7 +103,6 @@ struct DesignView: View {
                 .focusEffectDisabled()
                 .onKeyPress(keys: [.space, .return]) { _ in
                     conversationExpanded.toggle()
-                    historyHidden = false
                     return .handled
                 }
                 .overlay {
@@ -121,10 +119,8 @@ struct DesignView: View {
 
             transcript(session, width: panelSize.width)
                 .frame(width: panelSize.width,
-                       height: historyHidden ? 0 : max(0, panelSize.height - DesignConversationLayout.headerHeight - footerHeight))
+                       height: max(0, panelSize.height - DesignConversationLayout.headerHeight - footerHeight))
                 .clipped()
-                .allowsHitTesting(!historyHidden)
-                .accessibilityHidden(historyHidden)
             Divider().overlay(Theme.hairline)
             ScrollView {
                 VStack(spacing: 0) {
@@ -139,6 +135,16 @@ struct DesignView: View {
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: .infinity)
         }
+        // The panel stays built while it is small, so the transcript keeps its scroll
+        // position and the composer keeps its text.
+        .opacity(conversationMinimized ? 0 : 1)
+        .allowsHitTesting(!conversationMinimized)
+        .accessibilityHidden(conversationMinimized)
+        .overlay {
+            if conversationMinimized {
+                minimizedConversation(needsYou: needsYou)
+            }
+        }
         .frame(width: panelSize.width, height: panelSize.height)
         .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: 17))
@@ -149,26 +155,64 @@ struct DesignView: View {
         .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 8)
         .background(DesignConversationDismissal(
             expanded: conversationExpanded,
-            historyHidden: historyHidden,
+            minimized: conversationMinimized,
             footerHeight: footerHeight,
             enabled: dialogs.current == nil && !menus.isOpen,
             collapse: { keyboard in
                 conversationExpanded = false
-                // A press outside folds the panel all the way down to the composer, so the
-                // canvas gets back as much room as it can. Escape only steps back one level.
+                // A press outside shrinks the panel to a small tab, so the canvas gets back
+                // as much room as it can. Escape only steps back one level.
                 if keyboard {
                     composerFocused = false
                     conversationToggleFocused = true
                 } else {
-                    historyHidden = true
+                    composerFocused = false
+                    conversationMinimized = true
                 }
             },
             expand: {
                 conversationExpanded = true
-                historyHidden = false
             }))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: historyHidden)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationMinimized)
+    }
+
+    // A button as well as a hover target, so the panel can be brought back by keyboard
+    // and by assistive tools too.
+    private func minimizedConversation(needsYou: Bool) -> some View {
+        Button {
+            conversationMinimized = false
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "bubble.left")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Conversation")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Hover to expand")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                if needsYou {
+                    StateLight(tone: .needsYou, size: 6)
+                } else if runner.state(sessionID).isBusy {
+                    StateLight(tone: .running, size: 6)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            if inside { conversationMinimized = false }
+        }
+        .accessibilityLabel("Conversation")
+        .accessibilityValue(needsYou ? "Minimized, needs you"
+            : runner.state(sessionID).isBusy ? "Minimized, working" : "Minimized")
+        .accessibilityHint("Show the conversation")
     }
 
     private func transcript(_ session: ChatSession, width: CGFloat) -> some View {
@@ -240,7 +284,7 @@ struct DesignView: View {
                 transcriptAtBottom = atBottom
             }
             .onChange(of: transcriptShape(session)) {
-                if !historyHidden && transcriptAtBottom {
+                if transcriptAtBottom {
                     proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
                 }
             }
@@ -324,7 +368,6 @@ struct DesignView: View {
                         onOversizedPaste: attachPastedText,
                         onRecallUp: { runner.recallEarlier(sessionID, store: store) },
                         onRecallDown: { runner.recallLater(sessionID, store: store) },
-                        onSend: { historyHidden = false },
                         above: {
                             let queued = runner.queued(sessionID).count
                             if queued > 0 {

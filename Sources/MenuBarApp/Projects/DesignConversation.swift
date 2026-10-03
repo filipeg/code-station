@@ -3,6 +3,7 @@ import SwiftUI
 
 enum DesignConversationLayout {
     static let headerHeight: CGFloat = 53
+    static let minimizedSize = CGSize(width: 210, height: 56)
 
     static func inset(in workspace: CGSize) -> CGFloat {
         min(workspace.width < 720 ? 12 : 22, max(0, min(workspace.width, workspace.height) / 2))
@@ -10,14 +11,17 @@ enum DesignConversationLayout {
 
     // The folded panel follows the measured heights of the transcript and the composer, so a
     // short transcript does not leave a gap above it. A long transcript stops at the folded cap.
-    static func size(in workspace: CGSize, expanded: Bool, historyHidden: Bool = false,
+    static func size(in workspace: CGSize, expanded: Bool, minimized: Bool = false,
                      composerHeight: CGFloat = 167, transcriptHeight: CGFloat = .infinity) -> CGSize {
         let margin = inset(in: workspace) * 2
         let available = CGSize(width: max(0, workspace.width - margin),
                                height: max(0, workspace.height - margin))
+        if minimized {
+            return CGSize(width: min(minimizedSize.width, available.width),
+                          height: min(minimizedSize.height, available.height))
+        }
         guard expanded else {
-            let height = historyHidden ? headerHeight + composerHeight
-                : min(326, headerHeight + transcriptHeight + composerHeight)
+            let height = min(326, headerHeight + transcriptHeight + composerHeight)
             return CGSize(width: min(660, available.width), height: min(height, available.height))
         }
         return available
@@ -26,10 +30,10 @@ enum DesignConversationLayout {
 }
 
 // Observe presses without taking them away from the canvas or composer: a press on the
-// folded transcript opens it, and a press outside the panel folds it down to the composer.
+// folded transcript opens it, and a press outside the panel shrinks it to a small tab.
 struct DesignConversationDismissal: NSViewRepresentable {
     let expanded: Bool
-    let historyHidden: Bool
+    let minimized: Bool
     let footerHeight: CGFloat
     let enabled: Bool
     let collapse: (Bool) -> Void
@@ -39,7 +43,7 @@ struct DesignConversationDismissal: NSViewRepresentable {
 
     func updateNSView(_ view: ObserverView, context: Context) {
         view.expanded = expanded
-        view.historyHidden = historyHidden
+        view.minimized = minimized
         view.footerHeight = footerHeight
         view.enabled = enabled
         view.collapse = collapse
@@ -50,7 +54,7 @@ struct DesignConversationDismissal: NSViewRepresentable {
 
     final class ObserverView: NSView {
         var expanded = false
-        var historyHidden = false
+        var minimized = false
         var footerHeight: CGFloat = 0
         var enabled = true
         var collapse: ((Bool) -> Void)?
@@ -80,7 +84,7 @@ struct DesignConversationDismissal: NSViewRepresentable {
         }
 
         func handle(_ event: NSEvent, frontmost: NSWindow?) -> NSEvent? {
-            guard enabled, !isHiddenOrHasHiddenAncestor, let window,
+            guard enabled, !minimized, !isHiddenOrHasHiddenAncestor, let window,
                   event.window === window, window.attachedSheet == nil else { return event }
             let point = convert(event.locationInWindow, from: nil)
             guard expanded else {
@@ -91,7 +95,7 @@ struct DesignConversationDismissal: NSViewRepresentable {
                     && fromTop < bounds.height - footerHeight
                 if event.type == .leftMouseDown, bounds.contains(point), transcript {
                     expand?()
-                } else if event.type != .keyDown, !historyHidden, !bounds.contains(point) {
+                } else if event.type != .keyDown, !bounds.contains(point) {
                     collapse?(false)
                 }
                 return event
