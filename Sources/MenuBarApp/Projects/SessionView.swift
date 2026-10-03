@@ -200,6 +200,12 @@ struct SessionView: View {
         case .design:
             _tab = State(initialValue: .design)
             _requestedChange = State(initialValue: nil)
+        case .troubleshoot:
+            _tab = State(initialValue: .troubleshoot)
+            _requestedChange = State(initialValue: nil)
+        case .explorer:
+            _tab = State(initialValue: .explorer)
+            _requestedChange = State(initialValue: nil)
         case .changes:
             _tab = State(initialValue: .changes)
             _requestedChange = State(initialValue: nil)
@@ -307,6 +313,9 @@ struct SessionView: View {
             .background(stopShortcut)
             .onChange(of: terminalFocused) { _, focused in
                 if focused { composerFocused = false }
+            }
+            .onChange(of: tab, initial: true) {
+                store.noteSessionTab(openedDestination, for: sessionID)
             }
             .task(id: sessionID) {
                 selectedProjectID = requestedChange.flatMap { change in
@@ -735,6 +744,16 @@ struct SessionView: View {
     private func destination(_ label: String, icon: String, value: Tab) -> HeaderTab {
         HeaderTab(label: label, icon: icon, selected: tab == value) {
             tab = value
+        }
+    }
+
+    private var openedDestination: SessionDestination {
+        switch tab {
+        case .conversation: .conversation
+        case .design: .design
+        case .troubleshoot: .troubleshoot
+        case .changes: requestedChange.map { .change(root: $0.root, path: $0.path) } ?? .changes
+        case .explorer: .explorer
         }
     }
 

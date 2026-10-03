@@ -24,8 +24,10 @@ enum SessionDestination: Hashable {
     // The Design board behind the session's tab, which is where a session whose Design
     // companion is the live conversation belongs.
     case design
+    case troubleshoot
     case changes
     case change(root: String, path: String)
+    case explorer
 }
 
 struct SessionOpenRequest: Hashable {
@@ -93,6 +95,9 @@ final class ProjectStore {
     // fresh arrival. Without this, stepping back would record a new visit and there
     // would be no way out of the last two places.
     @ObservationIgnored private var isWalkingHistory = false
+    // The tab each session was last left on. The trail names sessions, not tabs, so
+    // walking back to one reopens it where the user was rather than on its conversation.
+    @ObservationIgnored private var lastSessionTabs: [UUID: SessionDestination] = [:]
 
     // Most session links open the conversation. A link whose purpose is reviewing the
     // working tree carries that intent through navigation so the destination matches the
@@ -436,6 +441,10 @@ final class ProjectStore {
         return true
     }
 
+    func noteSessionTab(_ destination: SessionDestination, for sessionID: UUID) {
+        lastSessionTabs[sessionID] = destination
+    }
+
     private func recordVisit() {
         guard !isWalkingHistory, let currentPlace else { return }
         history.visit(currentPlace)
@@ -447,9 +456,19 @@ final class ProjectStore {
         switch place {
         case .home: selectHome()
         case .project(let id): selectProject(id)
-        case .session(let id): selectSession(id)
+        case .session(let id): selectSession(id, destination: lastTab(of: id))
         case .workspace(let id): selectWorkspace(id)
         }
+    }
+
+    // A board that has since been removed is not worth coming back to: opening the Design
+    // tab without one would start a fresh Design instead.
+    private func lastTab(of sessionID: UUID) -> SessionDestination {
+        let destination = lastSessionTabs[sessionID] ?? .conversation
+        guard destination == .design, let session = session(sessionID) else { return destination }
+        return designSession(for: sessionID) != nil || session.sourceDesignSessionID != nil
+            ? .design
+            : .conversation
     }
 
     private func stillExists(_ place: NavigationPlace) -> Bool {

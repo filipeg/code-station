@@ -100,6 +100,40 @@ struct NavigationHistoryTests {
         #expect(store.selection == .session(session.id))
     }
 
+    @Test func walkingBackReopensTheTabTheSessionWasLeftOn() throws {
+        let project = try TestStore.project(in: store, named: "api")
+        let first = store.newSession(in: project.id)
+        let second = store.newSession(in: project.id)
+
+        store.selectSession(first.id)
+        store.noteSessionTab(.explorer, for: first.id)
+        store.selectSession(second.id)
+        store.noteSessionTab(.troubleshoot, for: second.id)
+
+        #expect(store.goBack())
+        #expect(store.sessionOpenRequest == SessionOpenRequest(sessionID: first.id,
+                                                               destination: .explorer))
+        #expect(store.goForward())
+        #expect(store.sessionOpenRequest == SessionOpenRequest(sessionID: second.id,
+                                                               destination: .troubleshoot))
+    }
+
+    // Opening the Design tab with no board behind it starts a new Design, which walking
+    // the trail must never do.
+    @Test func walkingBackToARemovedDesignOpensTheConversation() throws {
+        let project = try TestStore.project(in: store, named: "api")
+        let first = store.newSession(in: project.id)
+        let second = store.newSession(in: project.id)
+
+        store.selectSession(first.id)
+        store.noteSessionTab(.design, for: first.id)
+        store.selectSession(second.id)
+
+        #expect(store.goBack())
+        #expect(store.sessionOpenRequest == SessionOpenRequest(sessionID: first.id,
+                                                               destination: .conversation))
+    }
+
     @Test func theTrailIsCappedAtItsLimit() {
         var history = NavigationHistory()
         for _ in 0..<(NavigationHistory.limit + 50) {
