@@ -162,6 +162,12 @@ struct GlobalCommandPalette: View {
     @State private var query = ""
     @State private var category = GlobalCommandCategory.projects
     @State private var selected: GlobalCommandDestination?
+    // Kept apart from `selected` because hover must not scroll: scrolling slides
+    // another row under the mouse, which would hover it and scroll again.
+    @State private var scrollTarget: GlobalCommandDestination?
+    // Rows also report hover when the list moves under a still mouse, after a
+    // key press or a new filter. Only a real mouse move should pick a row.
+    @State private var lastPointer: CGPoint?
     @State private var resultWindow = GlobalCommandResultWindow()
     @FocusState private var searchFocused: Bool
 
@@ -187,6 +193,7 @@ struct GlobalCommandPalette: View {
         .task {
             resultWindow.reset()
             selected = results.first?.destination
+            lastPointer = NSEvent.mouseLocation
             await Task.yield()
             searchFocused = true
         }
@@ -283,7 +290,7 @@ struct GlobalCommandPalette: View {
                     .padding(.bottom, 10)
                 }
             }
-            .onChange(of: selected) { _, destination in
+            .onChange(of: scrollTarget) { _, destination in
                 guard let destination else { return }
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
                     proxy.scrollTo(destination, anchor: .center)
@@ -337,8 +344,12 @@ struct GlobalCommandPalette: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .onHover { hovering in
-            if hovering { selected = item.destination }
+        .onContinuousHover { phase in
+            guard case .active = phase else { return }
+            let pointer = NSEvent.mouseLocation
+            guard pointer != lastPointer else { return }
+            lastPointer = pointer
+            selected = item.destination
         }
     }
 
@@ -421,7 +432,12 @@ struct GlobalCommandPalette: View {
 
     private func resetResults() {
         resultWindow.reset()
-        selected = results.first?.destination
+        select(results.first?.destination)
+    }
+
+    private func select(_ destination: GlobalCommandDestination?) {
+        selected = destination
+        scrollTarget = destination
     }
 
     private func moveSelection(by offset: Int) {
@@ -435,12 +451,12 @@ struct GlobalCommandPalette: View {
            index == visibleResults.count - 1,
            resultWindow.hasMore(totalCount: results.count) {
             resultWindow.loadMore(totalCount: results.count)
-            selected = results[index + 1].destination
+            select(results[index + 1].destination)
             return
         }
-        selected = visibleResults[
+        select(visibleResults[
             (index + offset + visibleResults.count) % visibleResults.count
-        ].destination
+        ].destination)
     }
 
     private func activateSelection() {
