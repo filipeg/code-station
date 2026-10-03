@@ -57,4 +57,35 @@ struct NewSessionSheetSizeTests {
         host.layoutSubtreeIfNeeded()
         #expect(measured.value <= 200)
     }
+
+    @MainActor
+    @Test func workspaceSheetKeepsItsActionsWithinAShortWindow() throws {
+        let (store, scratch) = TestStore.make()
+        defer { withExtendedLifetime(scratch) {} }
+        let first = try TestStore.project(in: store, named: "api")
+        let second = try TestStore.project(in: store, named: "web")
+        let workspace = ProjectWorkspace(name: "Payments", projectIDs: [first.id, second.id],
+                                         leadProjectID: first.id)
+        let settings = AppSettings(
+            agentAvatarURL: scratch.url.appendingPathComponent("avatar.png"),
+            preferences: UserDefaults(suiteName: "workspace-sheet-size-\(UUID().uuidString)")!)
+        let measured = MeasuredHeight()
+        let host = NSHostingView(rootView: HeightProbe(report: { measured.value = $0 }) {
+            NewWorkspaceSessionView(workspace: workspace) { _ in }
+                .environment(store)
+                .environment(SessionRunner(paths: [.claudeCode: "/usr/bin/true"]))
+                .environment(DialogPresenter())
+                .environment(MenuPresenter())
+                .environment(TooltipPresenter())
+                .environment(settings)
+        })
+
+        for width: CGFloat in [560, 850] {
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 400)
+            host.layoutSubtreeIfNeeded()
+            #expect(measured.value > 200)
+            #expect(measured.value <= 400)
+        }
+    }
+
 }

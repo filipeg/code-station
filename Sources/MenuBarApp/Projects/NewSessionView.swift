@@ -234,6 +234,7 @@ struct FreshnessNotice: View {
     let report: GitFreshness.Report
     let forWorktree: Bool
     @Binding var startPoint: SessionStartPoint
+    var embedded = false
     let onChoose: () -> Void
 
     var body: some View {
@@ -256,6 +257,14 @@ struct FreshnessNotice: View {
                     }
                 }
             }
+            if embedded, report.isStale {
+                Text("Choose a starting point")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.attentionText)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Theme.attention.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+            }
             if report.isStale {
                 if forWorktree, let remote = report.remoteRef {
                     choice(.remote,
@@ -269,9 +278,15 @@ struct FreshnessNotice: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .surface(Theme.attention.opacity(0.08), cornerRadius: 11,
-                 border: Theme.attention.opacity(0.3))
+        .padding(embedded ? 0 : 12)
+        .padding(.top, embedded ? 12 : 0)
+        .surface(embedded ? .clear : Theme.attention.opacity(0.08), cornerRadius: 11,
+                 border: embedded ? .clear : Theme.attention.opacity(0.3))
+        .overlay(alignment: .top) {
+            if embedded { Rectangle().fill(Theme.border).frame(height: 1) }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Starting point")
     }
 
     private func choice(_ value: SessionStartPoint, title: String, detail: String) -> some View {
@@ -295,11 +310,16 @@ struct FreshnessNotice: View {
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: embedded ? .infinity : nil, alignment: .leading)
+            .padding(embedded ? 10 : 0)
+            .background(embedded && startPoint == value ? Theme.accent.opacity(0.08) : .clear,
+                        in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(startPoint == value ? .isSelected : [])
         .hoverFill(cornerRadius: 6)
-        .padding(.leading, 19)
+        .padding(.leading, embedded ? 0 : 19)
     }
 
     private var updateTitle: String? {
@@ -366,6 +386,7 @@ struct FreshnessNotice: View {
 struct CheckoutModePicker: View {
     let usesWorktree: Bool
     let supportsWorktree: Bool
+    var showsLocation = true
     let branch: String?
     let path: String
     let selectWorktree: () -> Void
@@ -398,42 +419,64 @@ struct CheckoutModePicker: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                ChoicePill(title: "Worktree", selected: usesWorktree,
-                           enabled: supportsWorktree, choose: selectWorktree)
-                    .appTooltip { worktreeTooltip }
-                    .accessibilityHint(worktreeAccessibilityHint)
-                ChoicePill(title: "Project folder", selected: !usesWorktree,
-                           choose: selectProjectFolder)
-                    .appTooltip {
-                        Tooltip(
-                            title: "Project folder",
-                            subtitle: "Edit the existing checkout directly. Sessions that share this folder cannot run together.")
-                    }
-                    .accessibilityHint("Edits the existing checkout directly, one session at a time.")
-                Spacer(minLength: 8)
-                HStack(spacing: 6) {
-                    if let branch {
-                        Label(branch, systemImage: "arrow.triangle.branch")
-                            .font(.mono(11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Text("·")
-                            .font(.mono(11))
+        if showsLocation {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    choices
+                    Spacer(minLength: 8)
+                    HStack(spacing: 6) {
+                        if let branch {
+                            Label(branch, systemImage: "arrow.triangle.branch")
+                                .font(.mono(11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Text("·").font(.mono(11)).foregroundStyle(.tertiary)
+                        }
+                        Text(path)
+                            .font(.mono(11.5))
                             .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
-                    Text(path)
-                        .font(.mono(11.5))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                }
+                hint
+            }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    choices
+                    Spacer(minLength: 0)
+                    hint.fixedSize()
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    choices
+                    hint
                 }
             }
-            Text(detail)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var hint: some View {
+        Text(detail)
+            .font(.system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var choices: some View {
+        HStack(spacing: 8) {
+            ChoicePill(title: "Worktree", selected: usesWorktree,
+                       enabled: supportsWorktree, choose: selectWorktree)
+                .appTooltip { worktreeTooltip }
+                .accessibilityHint(worktreeAccessibilityHint)
+            ChoicePill(title: "Project folder", selected: !usesWorktree,
+                       choose: selectProjectFolder)
+                .appTooltip {
+                    Tooltip(
+                        title: "Project folder",
+                        subtitle: "Edit the existing checkout directly. Sessions that share this folder cannot run together.")
+                }
+                .accessibilityHint("Edits the existing checkout directly, one session at a time.")
         }
     }
 }

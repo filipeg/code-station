@@ -224,6 +224,7 @@ struct ChoicePill: View {
             .opacity(enabled ? 1 : 0.45)
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .disabled(!enabled)
         .hoverLift(hovering)
         .onHover { hovering = $0 }
