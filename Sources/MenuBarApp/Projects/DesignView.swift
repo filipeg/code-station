@@ -25,6 +25,7 @@ struct DesignView: View {
     @State private var transcriptOffset: CGFloat = 0
     @State private var expandedTranscriptOffset: CGFloat?
     @State private var composerHeight: CGFloat = 167
+    @State private var transcriptHeight: CGFloat = .infinity
     @State private var selectionEnabled = false
     @State private var snapshotRequest: DesignSnapshotRequest?
     @State private var preparingHandoff = false
@@ -64,7 +65,8 @@ struct DesignView: View {
 
     private func floatingConversation(_ session: ChatSession, size: CGSize) -> some View {
         let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded,
-                                                      historyHidden: historyHidden, composerHeight: composerHeight)
+                                                      historyHidden: historyHidden, composerHeight: composerHeight,
+                                                      transcriptHeight: transcriptHeight)
         let footerHeight = min(composerHeight, max(0, panelSize.height - DesignConversationLayout.headerHeight))
         let needsYou = runner.question(sessionID) != nil || runner.waitIsStale(sessionID)
             || hasTurnEndAction(runner.state(sessionID))
@@ -250,6 +252,9 @@ struct DesignView: View {
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
                 transcriptOffset = offset
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
+                transcriptHeight = height
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentSize.height - geometry.visibleRect.maxY < 28
