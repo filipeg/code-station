@@ -105,7 +105,7 @@ struct ExplorerView: View {
         .background(ExplorerFileShortcuts(
             enabled: treeFocused && dialogs.current == nil && !pastingFiles,
             onCopy: copySelected,
-            onPaste: pasteFiles,
+            onPaste: { pasteFiles(at: selected) },
             onTrash: trashSelected,
             onRename: renameSelected))
         .background(WindowAnchor(monitor: findMonitor))
@@ -357,16 +357,24 @@ struct ExplorerView: View {
             drop(urls, into: folder)
         } isTargeted: { hoverDrop(key: node.path, folder: folder.path, $0) }
         .appContextMenu {
-            [.item("New File") { create(folder: false, in: folder) },
+            // Paste is only offered when the clipboard holds files, since the menu has no
+            // way to show an item that is there but cannot be used.
+            let paste: [MenuEntry] = Pasteboard.fileURLs().isEmpty || pastingFiles
+                ? []
+                : [.item("Paste", detail: "⌘V", action: { _ = pasteFiles(at: node) })]
+            return [.item("New File") { create(folder: false, in: folder) },
                     .item("New Folder") { create(folder: true, in: folder) },
                     .separator,
-                    .item("Copy") { copy(node) },
-                    .item("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) },
-                    .item("Open with default app") { NSWorkspace.shared.open(node.url) },
-                    .item("Copy Path") { Pasteboard.copy(node.path) },
-                    .separator,
-                    .item("Rename…") { startRename(node) },
-                    .item("Move to Trash", kind: .destructive) { confirmTrash(node) }]
+                    .item("Copy", detail: "⌘C", action: { copy(node) })]
+                + paste
+                + [.item("Copy Path") { Pasteboard.copy(node.path) },
+                   .separator,
+                   .item("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) },
+                   .item("Open with default app") { NSWorkspace.shared.open(node.url) },
+                   .separator,
+                   .item("Rename…", detail: "↩", action: { startRename(node) }),
+                   .item("Move to Trash", kind: .destructive, detail: "⌘⌫",
+                         action: { confirmTrash(node) })]
         }
     }
 
@@ -733,11 +741,13 @@ struct ExplorerView: View {
         Pasteboard.copy(node.url)
     }
 
-    private func pasteFiles() -> Bool {
+    // Into the given item when it is a folder, beside it when it is a file, and at the top
+    // with nothing given.
+    private func pasteFiles(at node: FileNode?) -> Bool {
         let sources = Pasteboard.fileURLs()
         guard !sources.isEmpty else { return false }
 
-        let destination = pasteDestination(for: sources)
+        let destination = pasteDestination(for: sources, at: node)
         let rootAtStart = root
         pastingFiles = true
         Task {
@@ -953,12 +963,12 @@ struct ExplorerView: View {
         path == item || path.hasPrefix(item + "/")
     }
 
-    private func pasteDestination(for sources: [URL]) -> URL {
-        guard let selected else { return rootURL }
-        guard selected.isDirectory else { return selected.url.deletingLastPathComponent() }
-        let selectedURL = selected.url.standardizedFileURL
-        let copyingSelection = sources.contains { $0.standardizedFileURL == selectedURL }
-        return copyingSelection ? selected.url.deletingLastPathComponent() : selected.url
+    private func pasteDestination(for sources: [URL], at node: FileNode?) -> URL {
+        guard let node else { return rootURL }
+        guard node.isDirectory else { return node.url.deletingLastPathComponent() }
+        let nodeURL = node.url.standardizedFileURL
+        let copyingItself = sources.contains { $0.standardizedFileURL == nodeURL }
+        return copyingItself ? node.url.deletingLastPathComponent() : node.url
     }
 
     // MARK: - Actions
