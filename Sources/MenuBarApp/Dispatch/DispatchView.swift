@@ -12,6 +12,9 @@ struct DispatchView: View {
 
     @State private var showingEnvironments = false
     @State private var renamingFolderID: UUID?
+    @State private var renamingRequestID: UUID?
+    @State private var dropSlot: RequestDropSlot?
+    @State private var rowHeights: [UUID: CGFloat] = [:]
 
     private var environment: ApiEnvironment { auth.active }
 
@@ -144,11 +147,41 @@ struct DispatchView: View {
     private func requestRow(_ request: SavedRequest) -> some View {
         RequestRow(request: request,
                    selected: request.id == store.selectedID,
-                   accent: environment.accent)
+                   isRenaming: renamingRequestID == request.id,
+                   accent: environment.accent,
+                   onRename: { name in
+                       store.rename(request.id, to: name)
+                       renamingRequestID = nil
+                   },
+                   onCancelRename: { renamingRequestID = nil })
             .contentShape(Rectangle())
             .onTapGesture { store.selectedID = request.id }
+            // Alongside the single tap rather than instead of it, so selecting a row
+            // does not wait to see whether a second click is coming.
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                renamingRequestID = request.id
+            })
             .appContextMenu { requestContextMenu(for: request) }
             .draggable(request.id.uuidString)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                rowHeights[request.id] = $0
+            }
+            .onDrop(of: [.plainText], delegate: RequestDropDelegate(
+                targetID: request.id,
+                rowHeight: rowHeights[request.id] ?? 0,
+                slot: $dropSlot,
+                onDrop: { store.move($0, beside: request.id, after: $1) }))
+            .overlay(alignment: dropSlot?.after == true ? .bottom : .top) {
+                if dropSlot?.targetID == request.id {
+                    // Drawn in the gap between rows, so the line sits where the
+                    // request will land rather than over a neighbour.
+                    Capsule()
+                        .fill(environment.accent)
+                        .frame(height: 2)
+                        .offset(y: dropSlot?.after == true ? 3.5 : -3.5)
+                        .allowsHitTesting(false)
+                }
+            }
     }
 
     private func folderContextMenu(for folder: RequestFolder) -> [MenuEntry] {
@@ -166,6 +199,10 @@ struct DispatchView: View {
 
     private func requestContextMenu(for request: SavedRequest) -> [MenuEntry] {
         var entries: [MenuEntry] = [
+            .item("Rename…") {
+                store.selectedID = request.id
+                renamingRequestID = request.id
+            },
             .item("Duplicate") {
                 if let copy = store.duplicate(request.id) {
                     auth.copyBasicPassword(from: request.id, to: copy)
@@ -410,28 +447,111 @@ private struct FolderRow: View {
     }
 }
 
+private struct RequestDropSlot: Equatable {
+    let targetID: UUID
+    let after: Bool
+}
+
+// Dropping on the top half of a row puts the request before it, the bottom half after.
+private struct RequestDropDelegate: DropDelegate {
+    let targetID: UUID
+    let rowHeight: CGFloat
+    @Binding var slot: RequestDropSlot?
+    let onDrop: (UUID, Bool) -> Void
+
+    private func after(_ info: DropInfo) -> Bool {
+        info.location.y > rowHeight / 2
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.plainText])
+    }
+
+    func dropEntered(info: DropInfo) {
+        slot = RequestDropSlot(targetID: targetID, after: after(info))
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let next = RequestDropSlot(targetID: targetID, after: after(info))
+        if slot != next { slot = next }
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        if slot?.targetID == targetID { slot = nil }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let placeAfter = after(info)
+        slot = nil
+        guard let provider = info.itemProviders(for: [.plainText]).first else { return false }
+        _ = provider.loadTransferable(type: String.self) { result in
+            guard case .success(let value) = result,
+                  let requestID = UUID(uuidString: value) else { return }
+            Task { @MainActor in onDrop(requestID, placeAfter) }
+        }
+        return true
+    }
+}
+
 private struct RequestRow: View {
     let request: SavedRequest
     let selected: Bool
+    let isRenaming: Bool
     let accent: Color
+    let onRename: (String) -> Void
+    let onCancelRename: () -> Void
 
     @State private var hovering = false
+    @State private var draftName = ""
+    @State private var cancelled = false
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             MethodTag(method: request.method)
-            Text(request.name.isEmpty ? "Untitled" : request.name)
-                .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                .lineLimit(1)
-                .truncationMode(.middle)
+            if isRenaming {
+                TextField("Request name", text: $draftName)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .fieldSurface(cornerRadius: 6)
+                    .focused($nameFocused)
+                    .onSubmit { onRename(draftName) }
+                    .onExitCommand {
+                        cancelled = true
+                        onCancelRename()
+                    }
+            } else {
+                Text(request.name.isEmpty ? "Untitled" : request.name)
+                    .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             Spacer(minLength: 0)
         }
         .padding(.leading, 10)
         .padding(.trailing, 10)
-        .padding(.vertical, 8)
+        .padding(.vertical, isRenaming ? 4 : 8)
         .surface(selected ? Theme.card : (hovering ? Theme.field : .clear), cornerRadius: 8,
                  border: selected ? accent.opacity(0.3) : .clear)
         .onHover { hovering = $0 }
+        .onAppear { prepareRename() }
+        .onChange(of: isRenaming) { _, _ in prepareRename() }
+        // Clicking away keeps the new name, the way Finder does. Escape is the only
+        // way to throw it away.
+        .onChange(of: nameFocused) { _, focused in
+            guard !focused, isRenaming, !cancelled else { return }
+            onRename(draftName)
+        }
+    }
+
+    private func prepareRename() {
+        guard isRenaming else { return }
+        draftName = request.name
+        cancelled = false
+        nameFocused = true
     }
 }
 
@@ -504,6 +624,11 @@ private struct RequestDetail: View {
             ResponsePane(result: result, running: running)
         }
         .onChange(of: draft) { _, new in store.update(new) }
+        // The sidebar can rename this request too. Without this the old name in the
+        // draft would be written back on the next edit here.
+        .onChange(of: store.selected?.name) { _, name in
+            if let name, name != draft.name { draft.name = name }
+        }
     }
 
     private var title: some View {
