@@ -310,6 +310,56 @@ struct FileTreeTests {
         }
     }
 
+    @Test func movesItemsIntoAFolder() async throws {
+        let file = root.appendingPathComponent("notes.txt")
+        let folder = root.appendingPathComponent("Guide")
+        let destination = root.appendingPathComponent("docs")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try Data("n".utf8).write(to: file)
+        try Data("g".utf8).write(to: folder.appendingPathComponent("README.md"))
+
+        let result = await FileTree.move([file, folder], into: destination)
+
+        #expect(result.failures.isEmpty)
+        #expect(result.moved.map(\.to.lastPathComponent) == ["notes.txt", "Guide"])
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(try String(contentsOf: destination.appendingPathComponent("Guide/README.md"),
+                           encoding: .utf8) == "g")
+    }
+
+    @Test func aMoveNeverReplacesWhatIsThere() async throws {
+        let file = root.appendingPathComponent("notes.txt")
+        let destination = root.appendingPathComponent("docs")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try Data("new".utf8).write(to: file)
+        try Data("old".utf8).write(to: destination.appendingPathComponent("notes.txt"))
+
+        let result = await FileTree.move([file], into: destination)
+
+        #expect(result.moved.isEmpty)
+        #expect(result.failures.map(\.name) == ["notes.txt"])
+        #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+        #expect(try String(contentsOf: destination.appendingPathComponent("notes.txt"),
+                           encoding: .utf8) == "old")
+    }
+
+    @Test func droppingWhereAnItemStartedDoesNothing() async throws {
+        let folder = root.appendingPathComponent("src")
+        let nested = folder.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        let inPlace = await FileTree.move([folder], into: root)
+        let ontoItself = await FileTree.move([folder], into: folder)
+        let intoItsChild = await FileTree.move([folder], into: nested)
+
+        #expect(inPlace == FileTree.MoveResult())
+        #expect(ontoItself == FileTree.MoveResult())
+        #expect(intoItsChild.moved.isEmpty)
+        #expect(intoItsChild.failures.map(\.name) == ["src"])
+        #expect(FileManager.default.fileExists(atPath: nested.path))
+    }
+
     @Test func movesUpAndDownThroughVisibleRows() {
         let rows = navigationRows()
 

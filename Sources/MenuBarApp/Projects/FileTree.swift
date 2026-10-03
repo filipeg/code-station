@@ -109,6 +109,16 @@ enum FileTree {
         var failures: [CopyFailure] = []
     }
 
+    struct Move: Sendable, Equatable {
+        let from: URL
+        let to: URL
+    }
+
+    struct MoveResult: Sendable, Equatable {
+        var moved: [Move] = []
+        var failures: [CopyFailure] = []
+    }
+
     // Past this the file is named and sized but not opened. The text view lays out only
     // what is on screen, so length costs little, but the whole file is still held in
     // memory twice over while it is open.
@@ -295,6 +305,46 @@ enum FileTree {
             } catch {
                 return error.localizedDescription
             }
+        }.value
+    }
+
+    // Unlike a copy, a move never picks a new name: the item is meant to arrive as itself,
+    // so a name already taken in the folder is refused rather than replaced.
+    static func move(_ sources: [URL], into directory: URL) async -> MoveResult {
+        await Task.detached(priority: .userInitiated) {
+            let files = FileManager.default
+            let target = directory.standardizedFileURL.path
+            var result = MoveResult()
+            for source in sources {
+                let path = source.standardizedFileURL.path
+                let name = source.lastPathComponent
+                // Let go where it started, or on itself: nothing to do.
+                if target == path
+                    || source.deletingLastPathComponent().standardizedFileURL.path == target {
+                    continue
+                }
+                guard !target.hasPrefix(path + "/") else {
+                    result.failures.append(CopyFailure(
+                        name: name, message: "A folder cannot be moved into itself."))
+                    continue
+                }
+                let destination = directory.appendingPathComponent(name)
+                // Read without following links, so a broken link already sitting there
+                // still counts as taken.
+                guard (try? files.attributesOfItem(atPath: destination.path)) == nil else {
+                    result.failures.append(CopyFailure(
+                        name: name, message: "Something called \(name) is already in that folder."))
+                    continue
+                }
+                do {
+                    try files.moveItem(at: source, to: destination)
+                    result.moved.append(Move(from: source, to: destination))
+                } catch {
+                    result.failures.append(CopyFailure(name: name,
+                                                       message: error.localizedDescription))
+                }
+            }
+            return result
         }.value
     }
 

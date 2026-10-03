@@ -6,8 +6,8 @@ import SwiftUI
 // what you want when the agent names a file you have never opened.
 //
 // A text file opens straight into an editor: there is no read mode to leave first, and
-// nothing is written until Save. The tree itself can create, copy, paste, rename and move
-// items to the Trash.
+// nothing is written until Save. The tree itself can create, copy, paste, rename, drag to
+// move and move items to the Trash.
 // Says that a file being read has taken Cmd+F. It travels up to the window so the sidebar
 // can stop naming that stroke as the way into its own filter while the file answers for it.
 struct FileFindShortcutKey: PreferenceKey {
@@ -45,6 +45,9 @@ struct ExplorerView: View {
     @State private var renameSelection: TextSelection?
     @State private var renameCancelled = false
     @FocusState private var renameFocused: Bool
+    // What a drag is over, and the folder a drop there would land in. A file row hands the
+    // drop to the folder it sits in, so that folder is what lights up.
+    @State private var dropHover: DropHover?
     // The folder the pane holds now. It trails `root` for a moment when the session
     // changes, which is what lets the old folder be remembered before the new one opens.
     @State private var openedRoot: String?
@@ -219,6 +222,11 @@ struct ExplorerView: View {
 
     // One visible row: the entry and how deep it sits. Folders that are shut contribute
     // nothing, so this is only ever as long as what is actually open.
+    private struct DropHover: Equatable {
+        let key: String
+        let folder: String
+    }
+
     private struct Row: Identifiable {
         let node: FileNode
         let depth: Int
@@ -266,7 +274,16 @@ struct ExplorerView: View {
                 }
             }
         }
+        .overlay {
+            if dropHover?.folder == root {
+                RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.65), lineWidth: 1.5)
+                    .padding(2)
+            }
+        }
         .contentShape(Rectangle())
+        .dropDestination(for: URL.self) { urls, _ in
+            drop(urls, into: rootURL)
+        } isTargeted: { hoverDrop(key: root, folder: root, $0) }
         .focusable()
         .focused($treeFocused)
         .focusEffectDisabled()
@@ -285,6 +302,8 @@ struct ExplorerView: View {
         let node = row.node
         let isOpen = expanded.contains(node.path)
         let isSelected = selected?.path == node.path
+        let isDropTarget = dropHover?.folder == node.path
+        let folder = node.isDirectory ? node.url : node.url.deletingLastPathComponent()
 
         return Button {
             treeFocused = true
@@ -325,15 +344,20 @@ struct ExplorerView: View {
             .padding(.vertical, 3)
             .padding(.trailing, 8)
             .padding(.leading, CGFloat(row.depth) * 13 + 6)
-            .surface(isSelected ? Theme.card : .clear, cornerRadius: 6,
-                     border: isSelected ? Theme.border : .clear)
+            .surface(isDropTarget ? Theme.accent.opacity(0.12) : (isSelected ? Theme.card : .clear),
+                     cornerRadius: 6,
+                     border: isDropTarget ? Theme.accent.opacity(0.65)
+                         : (isSelected ? Theme.border : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .hoverFill(cornerRadius: 6)
+        .draggable(node.url)
+        .dropDestination(for: URL.self) { urls, _ in
+            drop(urls, into: folder)
+        } isTargeted: { hoverDrop(key: node.path, folder: folder.path, $0) }
         .appContextMenu {
-            let folder = node.isDirectory ? node.url : node.url.deletingLastPathComponent()
-            return [.item("New File") { create(folder: false, in: folder) },
+            [.item("New File") { create(folder: false, in: folder) },
                     .item("New Folder") { create(folder: true, in: folder) },
                     .separator,
                     .item("Copy") { copy(node) },
@@ -847,29 +871,78 @@ struct ExplorerView: View {
                 dialogs.show(.notice("Could not rename \(node.name)", message: failure))
             case .renamed(let url):
                 guard root == rootAtStart else { return }
-                await moved(node, to: url)
+                await moved(from: node.path, to: url)
             }
         }
     }
 
     // Everything the pane knows by path follows the item to its new name, so open folders
     // stay open and an open file keeps its unsaved edits.
-    private func moved(_ node: FileNode, to url: URL) async {
-        let old = node.path
+    private func moved(from old: String, to url: URL) async {
         let new = url.path
         expanded = Set(expanded.map { FileTree.path($0, afterMoving: old, to: new) })
-        children = children.filter { !contains(node, $0.key) }
-        if var current = selected, contains(node, current.path) {
+        children = children.filter { !isInside($0.key, old) }
+        if var current = selected, isInside(current.path, old) {
             current.url = URL(fileURLWithPath: FileTree.path(current.path, afterMoving: old, to: new))
             current.name = current.url.lastPathComponent
             selected = current
             language = CodeLanguage(fileExtension: current.kind)
         }
-        await load(url.deletingLastPathComponent().path)
+        let oldParent = (old as NSString).deletingLastPathComponent
+        let newParent = url.deletingLastPathComponent().path
+        if oldParent != newParent, children[oldParent] != nil { await load(oldParent) }
+        await load(newParent)
         for path in expanded.sorted(by: { $0.count < $1.count })
         where isInside(path, new) {
             await load(path)
         }
+    }
+
+    // Rows above and below can both report a drag at once as it crosses between them, so a
+    // row only clears the highlight it set itself.
+    private func hoverDrop(key: String, folder: String, _ targeted: Bool) {
+        if targeted {
+            dropHover = DropHover(key: key, folder: folder)
+        } else if dropHover?.key == key {
+            dropHover = nil
+        }
+    }
+
+    // Items from inside this folder move. Anything from outside is copied in, the way a
+    // paste is, so dragging a file in never takes it away from where it lives.
+    private func drop(_ urls: [URL], into folder: URL) -> Bool {
+        dropHover = nil
+        guard !urls.isEmpty else { return false }
+        let rootPath = rootURL.standardizedFileURL.path
+        let local = urls.filter { isInside($0.standardizedFileURL.path, rootPath) }
+        let outside = urls.filter { !isInside($0.standardizedFileURL.path, rootPath) }
+
+        let rootAtStart = root
+        Task {
+            var failures: [FileTree.CopyFailure] = []
+            if !local.isEmpty {
+                let result = await FileTree.move(local, into: folder)
+                guard root == rootAtStart else { return }
+                for move in result.moved {
+                    await moved(from: move.from.path, to: move.to)
+                }
+                failures += result.failures
+            }
+            if !outside.isEmpty {
+                let result = await FileTree.copy(outside, into: folder)
+                guard root == rootAtStart else { return }
+                if !result.copied.isEmpty { await load(folder.path) }
+                failures += result.failures
+            }
+            if folder.path != root { expanded.insert(folder.path) }
+            if children[folder.path] == nil { await load(folder.path) }
+
+            guard !failures.isEmpty else { return }
+            dialogs.show(.notice(
+                failures.count == 1 ? "Could not move the item" : "Could not move some items",
+                message: failures.map { "\($0.name): \($0.message)" }.joined(separator: "\n")))
+        }
+        return true
     }
 
     private func contains(_ node: FileNode, _ path: String) -> Bool {
