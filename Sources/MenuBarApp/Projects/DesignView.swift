@@ -494,7 +494,7 @@ struct DesignView: View {
                                        height: max(0, geometry.size.height - toolbarHeight))
                 canvasContent(session, directory: directory, busy: busy)
                     .frame(width: geometry.size.width, height: geometry.size.height)
-                    .overlay(alignment: .bottomLeading) {
+                    .overlay(alignment: .bottom) {
                         floatingConversation(session, size: workspace)
                             .padding(DesignConversationLayout.inset(in: workspace))
                             .padding(.bottom, toolbarHeight)
