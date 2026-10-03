@@ -196,11 +196,14 @@ struct AppSidebar: View {
         store.sessionToReveal = session.id
     }
 
-    // Where opening a card lands. The Design conversation is behind a tab rather than on
-    // a row of its own, so a card standing for one has to open on the board: the chat it
-    // would otherwise show is not the conversation the card was describing.
+    // Where opening a card lands: the tab the session was left on. The Design
+    // conversation is behind a tab rather than on a row of its own, so a card standing for
+    // one opens on the board instead of the chat, which is not the conversation the card
+    // was describing.
     private func destination(for session: ChatSession) -> SessionDestination {
-        LiveConversation.of(session.id, store: store, runner: runner) == nil
+        let last = store.lastTab(of: session.id)
+        guard last == .conversation else { return last }
+        return LiveConversation.of(session.id, store: store, runner: runner) == nil
             ? .conversation
             : .design
     }

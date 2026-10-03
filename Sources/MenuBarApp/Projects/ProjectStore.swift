@@ -463,7 +463,7 @@ final class ProjectStore {
 
     // A board that has since been removed is not worth coming back to: opening the Design
     // tab without one would start a fresh Design instead.
-    private func lastTab(of sessionID: UUID) -> SessionDestination {
+    func lastTab(of sessionID: UUID) -> SessionDestination {
         let destination = lastSessionTabs[sessionID] ?? .conversation
         guard destination == .design, let session = session(sessionID) else { return destination }
         return designSession(for: sessionID) != nil || session.sourceDesignSessionID != nil

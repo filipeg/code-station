@@ -134,6 +134,17 @@ struct NavigationHistoryTests {
                                                                destination: .conversation))
     }
 
+    @Test func aSessionNeverLeftOnATabOpensItsConversation() throws {
+        let project = try TestStore.project(in: store, named: "api")
+        let opened = store.newSession(in: project.id)
+        let untouched = store.newSession(in: project.id)
+
+        store.noteSessionTab(.changes, for: opened.id)
+
+        #expect(store.lastTab(of: opened.id) == .changes)
+        #expect(store.lastTab(of: untouched.id) == .conversation)
+    }
+
     @Test func theTrailIsCappedAtItsLimit() {
         var history = NavigationHistory()
         for _ in 0..<(NavigationHistory.limit + 50) {
