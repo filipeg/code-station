@@ -6,8 +6,8 @@ import SwiftUI
 // what you want when the agent names a file you have never opened.
 //
 // A text file opens straight into an editor: there is no read mode to leave first, and
-// nothing is written until Save. The tree itself stays read-only: nothing here creates,
-// renames or deletes anything.
+// nothing is written until Save. The tree can copy, paste and move items to the Trash,
+// but it never creates or renames anything.
 // Says that a file being read has taken Cmd+F. It travels up to the window so the sidebar
 // can stop naming that stroke as the way into its own filter while the file answers for it.
 struct FileFindShortcutKey: PreferenceKey {
@@ -96,7 +96,8 @@ struct ExplorerView: View {
         .background(ExplorerFileShortcuts(
             enabled: treeFocused && dialogs.current == nil && !pastingFiles,
             onCopy: copySelected,
-            onPaste: pasteFiles))
+            onPaste: pasteFiles,
+            onTrash: trashSelected))
         .background(WindowAnchor(monitor: findMonitor))
         .background(WindowAnchor(monitor: commandFindMonitor))
         .preference(key: FileFindShortcutKey.self, value: canFind)
@@ -300,7 +301,9 @@ struct ExplorerView: View {
             [.item("Copy") { copy(node) },
              .item("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) },
              .item("Open with default app") { NSWorkspace.shared.open(node.url) },
-             .item("Copy Path") { Pasteboard.copy(node.path) }]
+             .item("Copy Path") { Pasteboard.copy(node.path) },
+             .separator,
+             .item("Move to Trash", kind: .destructive) { confirmTrash(node) }]
         }
     }
 
@@ -658,6 +661,51 @@ struct ExplorerView: View {
         return true
     }
 
+    private func trashSelected() -> Bool {
+        guard let selected else { return false }
+        confirmTrash(selected)
+        return true
+    }
+
+    private func confirmTrash(_ node: FileNode) {
+        let losesEdits = dirty && selected.map { contains(node, $0.path) } == true
+        let message = losesEdits
+            ? "Unsaved edits to \(selected?.name ?? "the open file") will be lost."
+            : "You can put it back from the Trash in Finder."
+        dialogs.show(.confirm("Move \(node.name) to the Trash?", message: message,
+                              action: "Move to Trash") { trash(node) })
+    }
+
+    private func trash(_ node: FileNode) {
+        let rootAtStart = root
+        Task {
+            if let failure = await FileTree.trash(node.url) {
+                dialogs.show(.notice("Could not move \(node.name) to the Trash", message: failure))
+                return
+            }
+            guard root == rootAtStart else { return }
+
+            expanded = expanded.filter { !contains(node, $0) }
+            children = children.filter { !contains(node, $0.key) }
+            if let selected, contains(node, selected.path) {
+                resetFind()
+                self.selected = nil
+                preview = nil
+                loadingPreview = false
+                renderingMarkdown = false
+                language = nil
+                draft = ""
+                original = ""
+                loadedAt = nil
+            }
+            await load(node.url.deletingLastPathComponent().path)
+        }
+    }
+
+    private func contains(_ node: FileNode, _ path: String) -> Bool {
+        path == node.path || (node.isDirectory && !node.isLink && path.hasPrefix(node.path + "/"))
+    }
+
     private func pasteDestination(for sources: [URL]) -> URL {
         guard let selected else { return rootURL }
         guard selected.isDirectory else { return selected.url.deletingLastPathComponent() }
@@ -894,9 +942,10 @@ private struct ExplorerFileShortcuts: NSViewRepresentable {
     let enabled: Bool
     let onCopy: () -> Bool
     let onPaste: () -> Bool
+    let onTrash: () -> Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(enabled: enabled, onCopy: onCopy, onPaste: onPaste)
+        Coordinator(enabled: enabled, onCopy: onCopy, onPaste: onPaste, onTrash: onTrash)
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -911,6 +960,7 @@ private struct ExplorerFileShortcuts: NSViewRepresentable {
         context.coordinator.enabled = enabled
         context.coordinator.onCopy = onCopy
         context.coordinator.onPaste = onPaste
+        context.coordinator.onTrash = onTrash
     }
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
@@ -923,13 +973,16 @@ private struct ExplorerFileShortcuts: NSViewRepresentable {
         var enabled: Bool
         var onCopy: () -> Bool
         var onPaste: () -> Bool
+        var onTrash: () -> Bool
 
         private var token: Any?
 
-        init(enabled: Bool, onCopy: @escaping () -> Bool, onPaste: @escaping () -> Bool) {
+        init(enabled: Bool, onCopy: @escaping () -> Bool, onPaste: @escaping () -> Bool,
+             onTrash: @escaping () -> Bool) {
             self.enabled = enabled
             self.onCopy = onCopy
             self.onPaste = onPaste
+            self.onTrash = onTrash
         }
 
         func start() {
@@ -945,6 +998,8 @@ private struct ExplorerFileShortcuts: NSViewRepresentable {
                   event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command else {
                 return false
             }
+            // Cmd+Delete is Finder's stroke for Move to Trash.
+            if event.keyCode == 51 { return onTrash() }
             return switch event.charactersIgnoringModifiers?.lowercased() {
             case "c": onCopy()
             case "v": onPaste()

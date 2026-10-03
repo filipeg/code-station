@@ -228,6 +228,15 @@ struct FileTreeTests {
         #expect(!FileManager.default.fileExists(atPath: destination.appendingPathComponent("source").path))
     }
 
+    @Test func movesItemsToTheTrash() async throws {
+        let file = root.appendingPathComponent("scratch.txt")
+        try Data("bye".utf8).write(to: file)
+
+        #expect(await FileTree.trash(file) == nil)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(await FileTree.trash(file) != nil)
+    }
+
     @Test func movesUpAndDownThroughVisibleRows() {
         let rows = navigationRows()
 

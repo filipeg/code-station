@@ -285,6 +285,19 @@ enum FileTree {
         }.value
     }
 
+    // The Trash rather than a real delete, so a slip in the tree can be undone from Finder.
+    // Returns why it failed, or nil once the item is gone.
+    static func trash(_ url: URL) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            do {
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }.value
+    }
+
     private static func availableCopyURL(for source: URL, isDirectory: Bool,
                                          in directory: URL, files: FileManager) -> URL {
         let original = directory.appendingPathComponent(source.lastPathComponent,
