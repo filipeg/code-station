@@ -237,6 +237,52 @@ struct FileTreeTests {
         #expect(await FileTree.trash(file) != nil)
     }
 
+    @Test func renamesAnItemInItsFolder() async throws {
+        let file = root.appendingPathComponent("draft.txt")
+        try Data("hi".utf8).write(to: file)
+
+        let result = await FileTree.rename(file, to: " final.txt ")
+
+        #expect(result == .renamed(root.appendingPathComponent("final.txt")))
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(try String(contentsOf: root.appendingPathComponent("final.txt"),
+                           encoding: .utf8) == "hi")
+    }
+
+    @Test func renamesWhenOnlyTheCaseChanges() async throws {
+        let file = root.appendingPathComponent("readme.md")
+        try Data("hi".utf8).write(to: file)
+
+        let result = await FileTree.rename(file, to: "README.md")
+
+        #expect(result == .renamed(root.appendingPathComponent("README.md")))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["README.md"])
+    }
+
+    @Test func refusesNamesThatWouldLoseOrMoveSomething() async throws {
+        let file = root.appendingPathComponent("a.txt")
+        try Data("a".utf8).write(to: file)
+        try Data("b".utf8).write(to: root.appendingPathComponent("b.txt"))
+
+        #expect(await FileTree.rename(file, to: "a.txt") == .unchanged)
+        for name in ["b.txt", "", "  ", "..", "sub/a.txt"] {
+            guard case .failed = await FileTree.rename(file, to: name) else {
+                Issue.record("\(name) was accepted")
+                continue
+            }
+        }
+        #expect(try String(contentsOf: file, encoding: .utf8) == "a")
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "b")
+    }
+
+    @Test func pathsInsideARenamedFolderFollowIt() {
+        #expect(FileTree.path("/p/src", afterMoving: "/p/src", to: "/p/lib") == "/p/lib")
+        #expect(FileTree.path("/p/src/a/b.swift", afterMoving: "/p/src", to: "/p/lib")
+                == "/p/lib/a/b.swift")
+        #expect(FileTree.path("/p/srcs/b.swift", afterMoving: "/p/src", to: "/p/lib")
+                == "/p/srcs/b.swift")
+    }
+
     @Test func movesUpAndDownThroughVisibleRows() {
         let rows = navigationRows()
 

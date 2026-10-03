@@ -6,8 +6,8 @@ import SwiftUI
 // what you want when the agent names a file you have never opened.
 //
 // A text file opens straight into an editor: there is no read mode to leave first, and
-// nothing is written until Save. The tree can copy, paste and move items to the Trash,
-// but it never creates or renames anything.
+// nothing is written until Save. The tree can copy, paste, rename and move items to the
+// Trash, but it never creates anything.
 // Says that a file being read has taken Cmd+F. It travels up to the window so the sidebar
 // can stop naming that stroke as the way into its own filter while the file answers for it.
 struct FileFindShortcutKey: PreferenceKey {
@@ -39,6 +39,12 @@ struct ExplorerView: View {
     @State private var treeWidth = ExplorerSplitLayout.defaultTreeWidth
     @State private var dragStartTreeWidth: CGFloat?
     @FocusState private var treeFocused: Bool
+    // The row being renamed, by path. The name is edited in place, the way Finder does it.
+    @State private var renaming: String?
+    @State private var renameDraft = ""
+    @State private var renameSelection: TextSelection?
+    @State private var renameCancelled = false
+    @FocusState private var renameFocused: Bool
     // The folder the pane holds now. It trails `root` for a moment when the session
     // changes, which is what lets the old folder be remembered before the new one opens.
     @State private var openedRoot: String?
@@ -97,7 +103,8 @@ struct ExplorerView: View {
             enabled: treeFocused && dialogs.current == nil && !pastingFiles,
             onCopy: copySelected,
             onPaste: pasteFiles,
-            onTrash: trashSelected))
+            onTrash: trashSelected,
+            onRename: renameSelected))
         .background(WindowAnchor(monitor: findMonitor))
         .background(WindowAnchor(monitor: commandFindMonitor))
         .preference(key: FileFindShortcutKey.self, value: canFind)
@@ -247,7 +254,15 @@ struct ExplorerView: View {
         .onMoveCommand(perform: moveTreeSelection)
     }
 
-    private func treeRow(_ row: Row) -> some View {
+    @ViewBuilder private func treeRow(_ row: Row) -> some View {
+        if renaming == row.node.path {
+            renameRow(row)
+        } else {
+            plainRow(row)
+        }
+    }
+
+    private func plainRow(_ row: Row) -> some View {
         let node = row.node
         let isOpen = expanded.contains(node.path)
         let isSelected = selected?.path == node.path
@@ -303,8 +318,42 @@ struct ExplorerView: View {
              .item("Open with default app") { NSWorkspace.shared.open(node.url) },
              .item("Copy Path") { Pasteboard.copy(node.path) },
              .separator,
+             .item("Rename…") { startRename(node) },
              .item("Move to Trash", kind: .destructive) { confirmTrash(node) }]
         }
+    }
+
+    // The same row with a field where the name was. Clicking away keeps the new name, the
+    // way Finder does, and Escape is the only way to throw it away.
+    private func renameRow(_ row: Row) -> some View {
+        let node = row.node
+        return HStack(spacing: 5) {
+            Color.clear.frame(width: 10)
+            Image(systemName: icon(node))
+                .font(.system(size: 11))
+                .foregroundStyle(node.isDirectory ? Theme.accent : .secondary)
+                .frame(width: 14)
+            TextField("Name", text: $renameDraft, selection: $renameSelection)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .fieldSurface(cornerRadius: 4)
+                .focused($renameFocused)
+                .onSubmit { commitRename(node) }
+                .onExitCommand {
+                    renameCancelled = true
+                    endRename()
+                }
+                .onAppear { focusRenameField(node) }
+                .onChange(of: renameFocused) { _, focused in
+                    guard !focused, renaming == node.path, !renameCancelled else { return }
+                    commitRename(node)
+                }
+        }
+        .padding(.vertical, 2)
+        .padding(.trailing, 8)
+        .padding(.leading, CGFloat(row.depth) * 13 + 6)
     }
 
     private func icon(_ node: FileNode) -> String {
@@ -702,8 +751,80 @@ struct ExplorerView: View {
         }
     }
 
+    private func renameSelected() -> Bool {
+        guard let selected else { return false }
+        startRename(selected)
+        return true
+    }
+
+    // The name is picked without its extension, so typing replaces just the part people
+    // usually mean to change.
+    private func startRename(_ node: FileNode) {
+        renameDraft = node.name
+        renameCancelled = false
+        renaming = node.path
+    }
+
+    // Focus selects the whole field, so the shorter selection is set after it lands.
+    private func focusRenameField(_ node: FileNode) {
+        renameFocused = true
+        let stem = node.isDirectory ? node.name : (node.name as NSString).deletingPathExtension
+        let end = stem.isEmpty ? node.name.endIndex : node.name.index(
+            node.name.startIndex, offsetBy: stem.count)
+        DispatchQueue.main.async {
+            renameSelection = TextSelection(range: node.name.startIndex..<end)
+        }
+    }
+
+    private func endRename() {
+        renaming = nil
+        renameFocused = false
+        treeFocused = true
+    }
+
+    private func commitRename(_ node: FileNode) {
+        let name = renameDraft
+        endRename()
+        let rootAtStart = root
+        Task {
+            switch await FileTree.rename(node.url, to: name) {
+            case .unchanged:
+                return
+            case .failed(let failure):
+                dialogs.show(.notice("Could not rename \(node.name)", message: failure))
+            case .renamed(let url):
+                guard root == rootAtStart else { return }
+                await moved(node, to: url)
+            }
+        }
+    }
+
+    // Everything the pane knows by path follows the item to its new name, so open folders
+    // stay open and an open file keeps its unsaved edits.
+    private func moved(_ node: FileNode, to url: URL) async {
+        let old = node.path
+        let new = url.path
+        expanded = Set(expanded.map { FileTree.path($0, afterMoving: old, to: new) })
+        children = children.filter { !contains(node, $0.key) }
+        if var current = selected, contains(node, current.path) {
+            current.url = URL(fileURLWithPath: FileTree.path(current.path, afterMoving: old, to: new))
+            current.name = current.url.lastPathComponent
+            selected = current
+            language = CodeLanguage(fileExtension: current.kind)
+        }
+        await load(url.deletingLastPathComponent().path)
+        for path in expanded.sorted(by: { $0.count < $1.count })
+        where isInside(path, new) {
+            await load(path)
+        }
+    }
+
     private func contains(_ node: FileNode, _ path: String) -> Bool {
-        path == node.path || (node.isDirectory && !node.isLink && path.hasPrefix(node.path + "/"))
+        isInside(path, node.path)
+    }
+
+    private func isInside(_ path: String, _ item: String) -> Bool {
+        path == item || path.hasPrefix(item + "/")
     }
 
     private func pasteDestination(for sources: [URL]) -> URL {
@@ -943,9 +1064,11 @@ private struct ExplorerFileShortcuts: NSViewRepresentable {
     let onCopy: () -> Bool
     let onPaste: () -> Bool
     let onTrash: () -> Bool
+    let onRename: () -> Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(enabled: enabled, onCopy: onCopy, onPaste: onPaste, onTrash: onTrash)
+        Coordinator(enabled: enabled, onCopy: onCopy, onPaste: onPaste, onTrash: onTrash,
+                    onRename: onRename)
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -961,6 +1084,7 @@ private struct ExplorerFileShortcuts: NSViewRepresentable {
         context.coordinator.onCopy = onCopy
         context.coordinator.onPaste = onPaste
         context.coordinator.onTrash = onTrash
+        context.coordinator.onRename = onRename
     }
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
@@ -974,15 +1098,17 @@ private struct ExplorerFileShortcuts: NSViewRepresentable {
         var onCopy: () -> Bool
         var onPaste: () -> Bool
         var onTrash: () -> Bool
+        var onRename: () -> Bool
 
         private var token: Any?
 
         init(enabled: Bool, onCopy: @escaping () -> Bool, onPaste: @escaping () -> Bool,
-             onTrash: @escaping () -> Bool) {
+             onTrash: @escaping () -> Bool, onRename: @escaping () -> Bool) {
             self.enabled = enabled
             self.onCopy = onCopy
             self.onPaste = onPaste
             self.onTrash = onTrash
+            self.onRename = onRename
         }
 
         func start() {
@@ -994,11 +1120,11 @@ private struct ExplorerFileShortcuts: NSViewRepresentable {
         }
 
         private func handle(_ event: NSEvent) -> Bool {
-            guard enabled, anchor?.window === NSApp.keyWindow,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command else {
-                return false
-            }
-            // Cmd+Delete is Finder's stroke for Move to Trash.
+            guard enabled, anchor?.window === NSApp.keyWindow else { return false }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            // Return renames and Cmd+Delete moves to the Trash, as they do in Finder.
+            if modifiers.isEmpty, event.keyCode == 36 { return onRename() }
+            guard modifiers == .command else { return false }
             if event.keyCode == 51 { return onTrash() }
             return switch event.charactersIgnoringModifiers?.lowercased() {
             case "c": onCopy()

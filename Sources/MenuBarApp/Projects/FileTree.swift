@@ -298,6 +298,59 @@ enum FileTree {
         }.value
     }
 
+    enum RenameResult: Equatable {
+        case renamed(URL)
+        case unchanged
+        case failed(String)
+    }
+
+    static func rename(_ url: URL, to name: String) async -> RenameResult {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name != url.lastPathComponent else { return .unchanged }
+        guard !name.isEmpty else { return .failed("A name cannot be empty.") }
+        guard name != ".", name != "..", !name.contains("/") else {
+            return .failed("A name cannot contain \"/\" or be \".\" or \"..\".")
+        }
+
+        return await Task.detached(priority: .userInitiated) {
+            let files = FileManager.default
+            let destination = url.deletingLastPathComponent().appendingPathComponent(name)
+            // On a disk that ignores case, a change of case alone finds the item itself.
+            let onlyCaseChanges = name.lowercased() == url.lastPathComponent.lowercased()
+            if !onlyCaseChanges, files.fileExists(atPath: destination.path) {
+                return .failed("Something called \(name) is already in this folder.")
+            }
+            do {
+                if onlyCaseChanges {
+                    // Moving straight onto a name the disk already counts as taken can be
+                    // refused, so the item steps through a name nothing else can have.
+                    let step = url.deletingLastPathComponent()
+                        .appendingPathComponent(".\(UUID().uuidString)")
+                    try files.moveItem(at: url, to: step)
+                    do {
+                        try files.moveItem(at: step, to: destination)
+                    } catch {
+                        try? files.moveItem(at: step, to: url)
+                        throw error
+                    }
+                } else {
+                    try files.moveItem(at: url, to: destination)
+                }
+                return .renamed(destination)
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        }.value
+    }
+
+    // Where a path ends up once the item at `old` is called `new`: the item itself and
+    // everything inside it move, anything else stays put.
+    static func path(_ path: String, afterMoving old: String, to new: String) -> String {
+        if path == old { return new }
+        guard path.hasPrefix(old + "/") else { return path }
+        return new + path.dropFirst(old.count)
+    }
+
     private static func availableCopyURL(for source: URL, isDirectory: Bool,
                                          in directory: URL, files: FileManager) -> URL {
         let original = directory.appendingPathComponent(source.lastPathComponent,
