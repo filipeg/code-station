@@ -63,8 +63,9 @@ struct DesignView: View {
     // MARK: - Conversation
 
     private func floatingConversation(_ session: ChatSession, size: CGSize) -> some View {
-        let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded, historyHidden: historyHidden)
-        let footerHeight = min(max(167, composerHeight), max(0, panelSize.height - DesignConversationLayout.headerHeight))
+        let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded,
+                                                      historyHidden: historyHidden, composerHeight: composerHeight)
+        let footerHeight = min(composerHeight, max(0, panelSize.height - DesignConversationLayout.headerHeight))
         let needsYou = runner.question(sessionID) != nil || runner.waitIsStale(sessionID)
             || hasTurnEndAction(runner.state(sessionID))
         return VStack(spacing: 0) {

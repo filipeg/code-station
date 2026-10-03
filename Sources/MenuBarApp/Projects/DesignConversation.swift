@@ -8,12 +8,15 @@ enum DesignConversationLayout {
         min(workspace.width < 720 ? 12 : 22, max(0, min(workspace.width, workspace.height) / 2))
     }
 
-    static func size(in workspace: CGSize, expanded: Bool, historyHidden: Bool = false) -> CGSize {
+    // With the history hidden the folded panel is just the header and the composer, so it
+    // follows the composer's measured height instead of leaving a gap under it.
+    static func size(in workspace: CGSize, expanded: Bool, historyHidden: Bool = false,
+                     composerHeight: CGFloat = 167) -> CGSize {
         let margin = inset(in: workspace) * 2
         let available = CGSize(width: max(0, workspace.width - margin),
                                height: max(0, workspace.height - margin))
         guard expanded else {
-            return CGSize(width: min(660, available.width), height: min(historyHidden ? 220 : 326, available.height))
+            return CGSize(width: min(660, available.width), height: min(historyHidden ? headerHeight + composerHeight : 326, available.height))
         }
         return available
     }

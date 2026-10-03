@@ -18,8 +18,8 @@ struct DesignConversationLayoutTests {
             }
         }
         let workspace = CGSize(width: 1200, height: 800)
-        #expect(DesignConversationLayout.size(in: workspace, expanded: false, historyHidden: true)
-                == CGSize(width: 660, height: 220))
+        #expect(DesignConversationLayout.size(in: workspace, expanded: false, historyHidden: true, composerHeight: 124)
+                == CGSize(width: 660, height: 177))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false)
                 == CGSize(width: 660, height: 326))
         #expect(DesignConversationLayout.size(in: workspace, expanded: true)
@@ -203,7 +203,9 @@ struct DesignConversationViewTests {
         try click(CGPoint(x: expandedFrame.maxX - 28, y: expandedFrame.maxY - 26))
         try await settle()
         #expect(!observer.expanded)
-        #expect(observer.bounds.height == 220)
+        let hiddenComposerFrame = composer.convert(composer.bounds, to: nil)
+        let foldedFrame = observer.convert(observer.bounds, to: nil)
+        #expect(foldedFrame.minY < hiddenComposerFrame.minY - 20 && hiddenComposerFrame.minY - foldedFrame.minY < 70)
         #expect(runner.draft(session.id).text == "Keep this draft")
         #expect(runner.draft(session.id).attachments == [attachment])
         #expect(descendants(hosting.view).contains { $0 === composer })
