@@ -925,6 +925,15 @@ private struct RequestDetail: View {
                         draft.bodyType = kind
                     }
                 }
+                Spacer(minLength: 12)
+                // Offered only when it would change something, so a body that does not
+                // parse yet or is already tidy shows nothing to press.
+                if draft.bodyType == .json,
+                   let formatted = JSONFormat.pretty(draft.body), formatted != draft.body {
+                    InlineLink(title: "Format", tint: environment.accent) {
+                        draft.body = formatted
+                    }
+                }
             }
             if draft.bodyType == .none {
                 Text("This request is sent without a body. Pick JSON, Text or Form to add one.")
@@ -942,11 +951,21 @@ private struct RequestDetail: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
-                TextEditor(text: $draft.body)
-                    .font(.mono(12))
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .cardSurface(cornerRadius: 10)
+                if draft.bodyType == .json {
+                    CodeEditorView(documentID: "\(draft.id)-body",
+                                   text: $draft.body,
+                                   language: .json,
+                                   matches: [],
+                                   currentMatch: nil)
+                        .padding(.vertical, 4)
+                        .cardSurface(cornerRadius: 10)
+                } else {
+                    TextEditor(text: $draft.body)
+                        .font(.mono(12))
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .cardSurface(cornerRadius: 10)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
