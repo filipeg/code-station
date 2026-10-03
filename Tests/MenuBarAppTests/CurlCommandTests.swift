@@ -36,6 +36,17 @@ struct CurlCommandTests {
         #expect(command == "curl \\\n  'https://example.test/things'")
     }
 
+    @Test(arguments: [HTTPMethod.get, .head])
+    func leavesASavedBodyOffARequestThatCannotCarryOne(method: HTTPMethod) {
+        let request = SavedRequest(name: "read", method: method, url: "https://example.test",
+                                   bodyType: .json, body: "{}")
+
+        let resolved = DispatchRunner.resolve(request, environment: testEnvironment, authorization: nil)
+
+        #expect(resolved.body == nil)
+        #expect(!resolved.headers.contains { $0.key == "Content-Type" })
+    }
+
     @Test func foldsInTheParamsAndTheEnvironment() {
         let request = SavedRequest(
             name: "read",

@@ -806,6 +806,13 @@ private struct RequestDetail: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             } else {
+                if !draft.method.canCarryBody {
+                    Text("A \(draft.method.rawValue) request is sent without a body. "
+                         + "This one is kept and goes out again if you switch to POST, PUT, PATCH or DELETE.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 TextEditor(text: $draft.body)
                     .font(.mono(12))
                     .scrollContentBackground(.hidden)

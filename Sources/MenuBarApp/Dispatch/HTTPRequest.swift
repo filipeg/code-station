@@ -6,6 +6,10 @@ enum HTTPMethod: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
+    // URLSession refuses a GET or HEAD that carries a body, failing with the misleading
+    // "resource exceeds maximum size".
+    var canCarryBody: Bool { self != .get && self != .head }
+
     // Reading down a list of requests, the method is what you scan for, so each one is
     // tinted: green for the safe read, warmer colours the more the call changes.
     var tint: Color {
