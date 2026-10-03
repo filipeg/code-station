@@ -191,29 +191,6 @@ struct TroubleshootTabView: View {
                                       attachments: entry(\.attachments),
                                       focused: $problemFocused,
                                       isBrief: true)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 7) { starters }
-                VStack(alignment: .leading, spacing: 7) { starters }
-            }
-        }
-    }
-
-    @ViewBuilder private var starters: some View {
-        Text("Start with").font(.system(size: 11)).foregroundStyle(.secondary)
-        ForEach(TroubleshootStarter.allCases, id: \.self) { starter in
-            Button {
-                runner.editBrief(sessionID) { $0.append(starter) }
-                problemFocused = true
-            } label: {
-                Text(starter.rawValue)
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .surface(Theme.background, cornerRadius: 14)
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityHint("Appends an editable outline to the problem description.")
         }
     }
 

@@ -554,10 +554,6 @@ final class SessionRunner {
         var attachments: [Attachment] = []
         var environment = TroubleshootEnvironment.first()
         var mcpServersEnabled = true
-
-        mutating func append(_ starter: TroubleshootStarter) {
-            problem += (problem.isEmpty ? "" : "\n\n") + starter.outline
-        }
     }
 
     func brief(_ sessionID: UUID) -> TroubleshootBrief {

@@ -181,20 +181,6 @@ struct TroubleshootSkillsBar: View {
 // What is failing, in the person's own words, with whatever they can already show for it
 // docked underneath. Files arrive by drag, by paste or from the file chooser, and the
 // three land in the same place.
-enum TroubleshootStarter: String, CaseIterable {
-    case error = "An error"
-    case slow = "Something slow"
-    case change = "A recent change"
-
-    var outline: String {
-        switch self {
-        case .error: "Error or unexpected behaviour:\n\nWhat I expected:\n\nWhat I already checked:\n"
-        case .slow: "What feels slow:\n\nHow long it takes, compared with normal:\n\nWhen it started:\n"
-        case .change: "What changed recently:\n\nWhat broke after the change:\n\nWhat I already checked:\n"
-        }
-    }
-}
-
 struct TroubleshootProblemEditor: View {
     @Binding var problem: String
     @Binding var attachments: [Attachment]

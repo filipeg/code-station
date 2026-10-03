@@ -456,21 +456,6 @@ struct TroubleshootBriefTests {
         #expect(runner.brief(sessionID).mcpServersEnabled == false)
     }
 
-    @Test func startersAppendWithoutReplacingTheExistingDescriptionOrEvidence() {
-        var brief = SessionRunner.TroubleshootBrief()
-        let evidence = Attachment(url: URL(fileURLWithPath: "/tmp/error.log"))
-        brief.attachments = [evidence]
-        brief.append(.error)
-        #expect(brief.problem == TroubleshootStarter.error.outline)
-        brief.problem = "My existing notes"
-        for starter in TroubleshootStarter.allCases {
-            let previous = brief.problem
-            brief.append(starter)
-            #expect(brief.problem == previous + "\n\n" + starter.outline)
-        }
-        #expect(brief.attachments == [evidence])
-    }
-
     @Test func eachSessionKeepsItsOwnBrief() {
         let runner = SessionRunner()
         let first = UUID()
