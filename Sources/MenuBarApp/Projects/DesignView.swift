@@ -16,9 +16,7 @@ struct DesignView: View {
     @State private var canvas = DesignCanvas()
     @State private var composerFocused = false
     @FocusState private var conversationToggleFocused: Bool
-    @FocusState private var historyToggleFocused: Bool
     @State private var conversationExpanded = false
-    @State private var historyHidden = false
     @State private var hasOpenedConversation = false
     @State private var transcriptAtBottom = true
     @State private var transcriptPosition = ScrollPosition(edge: .bottom)
@@ -65,7 +63,7 @@ struct DesignView: View {
 
     private func floatingConversation(_ session: ChatSession, size: CGSize) -> some View {
         let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded,
-                                                      historyHidden: historyHidden, composerHeight: composerHeight,
+                                                      composerHeight: composerHeight,
                                                       transcriptHeight: transcriptHeight)
         let footerHeight = min(composerHeight, max(0, panelSize.height - DesignConversationLayout.headerHeight))
         let needsYou = runner.question(sessionID) != nil || runner.waitIsStale(sessionID)
@@ -74,7 +72,6 @@ struct DesignView: View {
             HStack(spacing: 0) {
                 Button {
                     conversationExpanded.toggle()
-                    historyHidden = false
                 } label: {
                     HStack(spacing: 9) {
                         Image(systemName: "bubble.left")
@@ -105,7 +102,6 @@ struct DesignView: View {
                 .focusEffectDisabled()
                 .onKeyPress(keys: [.space, .return]) { _ in
                     conversationExpanded.toggle()
-                    historyHidden = false
                     return .handled
                 }
                 .overlay {
@@ -118,41 +114,12 @@ struct DesignView: View {
                 .accessibilityValue((conversationExpanded ? "Expanded" : "Collapsed")
                     + (needsYou ? ", needs you" : runner.state(sessionID).isBusy ? ", working" : ""))
                 .accessibilityHint(conversationExpanded ? "Collapse the transcript" : "Expand the transcript")
-
-                Button {
-                    historyHidden.toggle()
-                    conversationExpanded = false
-                } label: {
-                    Image(systemName: historyHidden ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 11))
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .focusable()
-                .focused($historyToggleFocused)
-                .focusEffectDisabled()
-                .onKeyPress(keys: [.space, .return]) { _ in
-                    historyHidden.toggle()
-                    conversationExpanded = false
-                    return .handled
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(historyToggleFocused ? Theme.accent : .clear, lineWidth: 2)
-                        .allowsHitTesting(false)
-                }
-                .accessibilityLabel(historyHidden ? "Show conversation history" : "Hide conversation history")
-                .accessibilityValue(historyHidden ? "Hidden" : "Visible")
-                .padding(.trailing, 12)
             }
 
             transcript(session, width: panelSize.width)
                 .frame(width: panelSize.width,
-                       height: historyHidden ? 0 : max(0, panelSize.height - DesignConversationLayout.headerHeight - footerHeight))
+                       height: max(0, panelSize.height - DesignConversationLayout.headerHeight - footerHeight))
                 .clipped()
-                .allowsHitTesting(!historyHidden)
-                .accessibilityHidden(historyHidden)
             Divider().overlay(Theme.hairline)
             ScrollView {
                 VStack(spacing: 0) {
@@ -187,10 +154,8 @@ struct DesignView: View {
             },
             expand: {
                 conversationExpanded = true
-                historyHidden = false
             }))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: historyHidden)
     }
 
     private func transcript(_ session: ChatSession, width: CGFloat) -> some View {
@@ -262,7 +227,7 @@ struct DesignView: View {
                 transcriptAtBottom = atBottom
             }
             .onChange(of: transcriptShape(session)) {
-                if !historyHidden && transcriptAtBottom {
+                if transcriptAtBottom {
                     proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
                 }
             }
@@ -346,7 +311,6 @@ struct DesignView: View {
                         onOversizedPaste: attachPastedText,
                         onRecallUp: { runner.recallEarlier(sessionID, store: store) },
                         onRecallDown: { runner.recallLater(sessionID, store: store) },
-                        onSend: { historyHidden = false },
                         above: {
                             let queued = runner.queued(sessionID).count
                             if queued > 0 {

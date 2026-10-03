@@ -8,18 +8,14 @@ struct DesignConversationLayoutTests {
         for workspace in [CGSize(width: 1200, height: 800), CGSize(width: 480, height: 600),
                           CGSize(width: 280, height: 120), .zero] {
             for expanded in [false, true] {
-                for hidden in [false, true] {
-                    let size = DesignConversationLayout.size(in: workspace, expanded: expanded, historyHidden: hidden)
-                    let inset = DesignConversationLayout.inset(in: workspace)
-                    #expect(size.width >= 0 && size.height >= 0)
-                    #expect(size.width + inset * 2 <= workspace.width)
-                    #expect(size.height + inset * 2 <= workspace.height)
-                }
+                let size = DesignConversationLayout.size(in: workspace, expanded: expanded)
+                let inset = DesignConversationLayout.inset(in: workspace)
+                #expect(size.width >= 0 && size.height >= 0)
+                #expect(size.width + inset * 2 <= workspace.width)
+                #expect(size.height + inset * 2 <= workspace.height)
             }
         }
         let workspace = CGSize(width: 1200, height: 800)
-        #expect(DesignConversationLayout.size(in: workspace, expanded: false, historyHidden: true, composerHeight: 124)
-                == CGSize(width: 660, height: 177))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false)
                 == CGSize(width: 660, height: 326))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false, composerHeight: 167, transcriptHeight: 60)
@@ -207,16 +203,10 @@ struct DesignConversationViewTests {
         try click(CGPoint(x: expandedFrame.maxX - 28, y: expandedFrame.maxY - 26))
         try await settle()
         #expect(!observer.expanded)
-        let hiddenComposerFrame = composer.convert(composer.bounds, to: nil)
-        let foldedFrame = observer.convert(observer.bounds, to: nil)
-        #expect(foldedFrame.minY < hiddenComposerFrame.minY - 20 && hiddenComposerFrame.minY - foldedFrame.minY < 70)
+        #expect(observer.bounds.height == 326)
         #expect(runner.draft(session.id).text == "Keep this draft")
         #expect(runner.draft(session.id).attachments == [attachment])
         #expect(descendants(hosting.view).contains { $0 === composer })
-        let hiddenFrame = observer.convert(observer.bounds, to: nil)
-        try click(CGPoint(x: hiddenFrame.maxX - 28, y: hiddenFrame.maxY - 26))
-        try await settle()
-        #expect(observer.bounds.height == 326)
         for width: CGFloat in [480, 700, 1000] {
             window.setContentSize(CGSize(width: width, height: 800))
             try await settle()

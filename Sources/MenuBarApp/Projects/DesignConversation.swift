@@ -10,14 +10,13 @@ enum DesignConversationLayout {
 
     // The folded panel follows the measured heights of the transcript and the composer, so a
     // short transcript does not leave a gap above it. A long transcript stops at the folded cap.
-    static func size(in workspace: CGSize, expanded: Bool, historyHidden: Bool = false,
+    static func size(in workspace: CGSize, expanded: Bool,
                      composerHeight: CGFloat = 167, transcriptHeight: CGFloat = .infinity) -> CGSize {
         let margin = inset(in: workspace) * 2
         let available = CGSize(width: max(0, workspace.width - margin),
                                height: max(0, workspace.height - margin))
         guard expanded else {
-            let height = historyHidden ? headerHeight + composerHeight
-                : min(326, headerHeight + transcriptHeight + composerHeight)
+            let height = min(326, headerHeight + transcriptHeight + composerHeight)
             return CGSize(width: min(660, available.width), height: min(height, available.height))
         }
         return available
@@ -78,7 +77,7 @@ struct DesignConversationDismissal: NSViewRepresentable {
                   event.window === window, window.attachedSheet == nil else { return event }
             let point = convert(event.locationInWindow, from: nil)
             guard expanded else {
-                // The header has its own fold buttons, so a press there is left to them.
+                // The header has its own fold button, so a press there is left to it.
                 let header = isFlipped ? point.y < DesignConversationLayout.headerHeight
                     : point.y > bounds.maxY - DesignConversationLayout.headerHeight
                 if event.type == .leftMouseDown, bounds.contains(point), !header {
