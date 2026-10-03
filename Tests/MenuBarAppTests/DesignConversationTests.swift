@@ -23,9 +23,9 @@ struct DesignConversationLayoutTests {
         #expect(DesignConversationLayout.size(in: CGSize(width: 180, height: 600), expanded: false, minimized: true)
                 == CGSize(width: 156, height: 56))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false)
-                == CGSize(width: 660, height: 326))
+                == CGSize(width: 880, height: 326))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false, composerHeight: 167, transcriptHeight: 60)
-                == CGSize(width: 660, height: 280))
+                == CGSize(width: 880, height: 280))
         #expect(DesignConversationLayout.size(in: workspace, expanded: true, transcriptHeight: 60)
                 == CGSize(width: 1156, height: 756))
         #expect(DesignConversationLayout.size(in: workspace, expanded: true)
@@ -164,7 +164,7 @@ struct DesignConversationViewTests {
             $0 as? DesignConversationDismissal.ObserverView
         }.first)
         #expect(!observer.expanded)
-        #expect(observer.bounds.size == CGSize(width: 660, height: 326))
+        #expect(observer.bounds.size == CGSize(width: 880, height: 326))
         let composer = try #require(descendants(hosting.view).compactMap { $0 as? NSTextView }.first { $0.isEditable })
         let composerFrame = composer.convert(composer.bounds, to: nil)
         let transcript = try #require(descendants(hosting.view).compactMap { $0 as? NSScrollView }.first {

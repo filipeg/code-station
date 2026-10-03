@@ -22,7 +22,7 @@ enum DesignConversationLayout {
         }
         guard expanded else {
             let height = min(326, headerHeight + transcriptHeight + composerHeight)
-            return CGSize(width: min(660, available.width), height: min(height, available.height))
+            return CGSize(width: min(880, available.width), height: min(height, available.height))
         }
         return available
     }
