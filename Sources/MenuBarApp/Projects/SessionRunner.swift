@@ -550,9 +550,14 @@ final class SessionRunner {
     // the tab makes about how the diagnosis runs.
     struct TroubleshootBrief: Equatable {
         var problem: String = ""
+        var incidentTime: String = ""
         var attachments: [Attachment] = []
         var environment = TroubleshootEnvironment.first()
         var mcpServersEnabled = true
+
+        mutating func append(_ starter: TroubleshootStarter) {
+            problem += (problem.isEmpty ? "" : "\n\n") + starter.outline
+        }
     }
 
     func brief(_ sessionID: UUID) -> TroubleshootBrief {

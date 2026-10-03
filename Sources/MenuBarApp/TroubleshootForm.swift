@@ -181,10 +181,25 @@ struct TroubleshootSkillsBar: View {
 // What is failing, in the person's own words, with whatever they can already show for it
 // docked underneath. Files arrive by drag, by paste or from the file chooser, and the
 // three land in the same place.
+enum TroubleshootStarter: String, CaseIterable {
+    case error = "An error"
+    case slow = "Something slow"
+    case change = "A recent change"
+
+    var outline: String {
+        switch self {
+        case .error: "Error or unexpected behaviour:\n\nWhat I expected:\n\nWhat I already checked:\n"
+        case .slow: "What feels slow:\n\nHow long it takes, compared with normal:\n\nWhen it started:\n"
+        case .change: "What changed recently:\n\nWhat broke after the change:\n\nWhat I already checked:\n"
+        }
+    }
+}
+
 struct TroubleshootProblemEditor: View {
     @Binding var problem: String
     @Binding var attachments: [Attachment]
     var focused: FocusState<Bool>.Binding
+    var isBrief = false
 
     @State private var dropTargeted = false
 
@@ -195,8 +210,9 @@ struct TroubleshootProblemEditor: View {
                     .font(.system(size: 13))
                     .scrollContentBackground(.hidden)
                     .padding(10)
-                    .frame(height: 120)
+                    .frame(height: isBrief ? 174 : 120)
                     .focused(focused)
+                    .accessibilityLabel("Problem description")
                 if problem.isEmpty {
                     Text("Describe what is failing, what you expected, and anything you already checked.")
                         .font(.system(size: 13))
@@ -233,7 +249,7 @@ struct TroubleshootProblemEditor: View {
                 Button(action: chooseFiles) {
                     HStack(spacing: 5) {
                         Image(systemName: "paperclip")
-                        Text("Add files")
+                        Text(isBrief ? "Add evidence" : "Add files")
                     }
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Theme.accent)
@@ -249,7 +265,7 @@ struct TroubleshootProblemEditor: View {
         }
         .background(RoundedRectangle(cornerRadius: 11).fill(Theme.card))
         .overlay(RoundedRectangle(cornerRadius: 11)
-            .stroke(dropTargeted ? Theme.accent : Theme.border,
+            .stroke(dropTargeted || (isBrief && focused.wrappedValue) ? Theme.accent : Theme.border,
                     lineWidth: dropTargeted ? 2 : 1))
         .dropDestination(for: URL.self) { urls, _ in
             attach(Attachments.fromDrop(urls))
@@ -258,6 +274,18 @@ struct TroubleshootProblemEditor: View {
         // Only while the description has the cursor: a screen that also holds a plain
         // text field would otherwise steal a path pasted into it as a file.
         .pasteAttachments(enabled: focused.wrappedValue) { attach($0) }
+        .onChange(of: attachments) { old, new in
+            guard isBrief, let window = NSApp?.keyWindow else { return }
+            let added = new.filter { item in !old.contains { $0.id == item.id } }
+            let removed = old.filter { item in !new.contains { $0.id == item.id } }
+            let message = [
+                added.isEmpty ? nil : "Evidence added: " + added.map { $0.url.lastPathComponent }.joined(separator: ", "),
+                removed.isEmpty ? nil : "Evidence removed: " + removed.map { $0.url.lastPathComponent }.joined(separator: ", ")
+            ].compactMap { $0 }.joined(separator: ". ")
+            NSAccessibility.post(element: window, notification: .announcementRequested,
+                                 userInfo: [.announcement: message,
+                                            .priority: NSAccessibilityPriorityLevel.low.rawValue])
+        }
     }
 
     private func chooseFiles() {
@@ -349,6 +377,17 @@ enum TroubleshootMCPState: Equatable {
         }
     }
 
+    func configurationLabel(for name: String) -> String {
+        switch self {
+        case .checking: return "Checking"
+        case .ready: return "Configured"
+        case .unavailable(let configuration):
+            if configuration.missing.contains(name) { return "Not configured" }
+            if configuration.disabled.contains(name) { return "Disabled" }
+            return "Configured"
+        }
+    }
+
     func message(for agent: AgentKind) -> String? {
         guard case .unavailable(let configuration) = self else { return nil }
         var messages: [String] = []
@@ -363,9 +402,8 @@ enum TroubleshootMCPState: Equatable {
     }
 }
 
-// Whether the diagnosis can reach the managed servers at all, and what it would find if
-// it tried. The count names the environment, since a server tagged for another one is
-// not offered here.
+// Client registration describes configuration, not live connectivity. Only servers
+// included in the chosen environment are offered here.
 struct TroubleshootMCPOptions: View {
     let agent: AgentKind
     let environment: TroubleshootEnvironment
@@ -373,14 +411,17 @@ struct TroubleshootMCPOptions: View {
     let environmentServers: [Server]
     let state: TroubleshootMCPState
     @Binding var enabled: Bool
+    var showsServerDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: $enabled) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Enable MCP servers")
+                    Text(showsServerDetails ? "Logs, metrics & traces" : "Enable MCP servers")
                         .font(.system(size: 13, weight: .medium))
-                    Text(managedServers.isEmpty
+                    Text(showsServerDetails && !enabled
+                         ? "MCP servers are off. Use project files and attached evidence."
+                         : managedServers.isEmpty
                          ? "Use any servers configured for the selected agent."
                          : "\(counted(environmentServers.count, "managed server")) available for \(environment.title).")
                         .font(.system(size: 11))
@@ -388,6 +429,29 @@ struct TroubleshootMCPOptions: View {
                 }
             }
             .toggleStyle(.appSwitch)
+            .accessibilityLabel("Enable MCP servers")
+
+            if showsServerDetails && enabled {
+                ForEach(environmentServers, id: \.name) { server in
+                    let status = state.configurationLabel(for: server.name)
+                    HStack(spacing: 9) {
+                        Image(systemName: "server.rack").foregroundStyle(.secondary)
+                        Text(server.name).textSelection(.enabled)
+                        Spacer(minLength: 8)
+                        Text(status)
+                            .foregroundStyle(status == "Configured" ? Theme.accent : Theme.attentionText)
+                    }
+                    .font(.system(size: 12))
+                    .padding(.top, 6)
+                    .accessibilityElement(children: .combine)
+                }
+                if !managedServers.isEmpty && environmentServers.isEmpty {
+                    Text("No managed servers match this environment.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Text("Configuration status only. Connectivity has not been checked.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
 
             switch state {
             case .ready:
@@ -409,6 +473,13 @@ struct TroubleshootMCPOptions: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Theme.deletion)
             }
+        }
+        .onChange(of: state) { _, state in
+            guard showsServerDetails, let message = state.message(for: agent),
+                  let window = NSApp?.keyWindow else { return }
+            NSAccessibility.post(element: window, notification: .announcementRequested,
+                                 userInfo: [.announcement: message,
+                                            .priority: NSAccessibilityPriorityLevel.high.rawValue])
         }
     }
 }
