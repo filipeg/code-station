@@ -15,6 +15,8 @@ struct DispatchView: View {
     @State private var renamingRequestID: UUID?
     @State private var dropSlot: RequestDropSlot?
     @State private var rowHeights: [UUID: CGFloat] = [:]
+    @State private var expanded = false
+    @State private var parentSize: CGSize?
 
     private var environment: ApiEnvironment { auth.active }
 
@@ -36,12 +38,22 @@ struct DispatchView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        // Kept inside the window's minimum size, since a sheet wider than its window
-        // gets clipped rather than growing it.
-        .frame(width: 940, height: 660)
+        .frame(width: sheetSize.width, height: sheetSize.height)
         .background(Theme.background)
+        .background(ParentWindowSize(size: $parentSize))
         .sheet(isPresented: $showingEnvironments) { EnvironmentsView() }
         .onAppear { store.selectedID = nil }
+    }
+
+    // A sheet wider than its window gets clipped rather than growing it, so both sizes
+    // follow the window the sheet hangs off, leaving a margin so it still reads as a sheet.
+    private var sheetSize: CGSize {
+        let compact = CGSize(width: 1020, height: 720)
+        guard let parentSize else { return CGSize(width: 940, height: 660) }
+        let room = CGSize(width: parentSize.width - 48, height: parentSize.height - 36)
+        if expanded { return room }
+        return CGSize(width: max(940, min(compact.width, room.width)),
+                      height: max(640, min(compact.height, room.height)))
     }
 
     private var header: some View {
@@ -69,6 +81,13 @@ struct DispatchView: View {
             InlineLink(title: "Environments", tint: environment.accent) {
                 showingEnvironments = true
             }
+            GlyphButton(icon: expanded ? "arrow.down.right.and.arrow.up.left"
+                                       : "arrow.up.left.and.arrow.down.right",
+                        side: 26, tint: environment.accent) {
+                expanded.toggle()
+            }
+            .appTooltip(expanded ? "Shrink" : "Expand to the window")
+            .accessibilityLabel(expanded ? "Shrink" : "Expand")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
@@ -1344,5 +1363,46 @@ private struct ResponsePane: View {
         if count < 1024 { return "\(count) B" }
         if count < 1024 * 1024 { return String(format: "%.1f kB", Double(count) / 1024) }
         return String(format: "%.1f MB", Double(count) / Double(1024 * 1024))
+    }
+}
+
+// Reports the size of the window a sheet hangs off, and keeps reporting it as that
+// window is resized, so the sheet can grow with it.
+private struct ParentWindowSize: NSViewRepresentable {
+    @Binding var size: CGSize?
+
+    func makeNSView(context: Context) -> NSView {
+        let view = WatchingView()
+        view.onChange = { size = $0 }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class WatchingView: NSView {
+        var onChange: ((CGSize) -> Void)?
+        private var observer: NSObjectProtocol?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        // A sheet leaves its window before it goes away, which is where the observer is let go.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+            guard window != nil else { return }
+            // The view joins the sheet's window before AppKit hangs that window off its parent.
+            DispatchQueue.main.async { [weak self] in self?.watchParent() }
+        }
+
+        private func watchParent() {
+            guard observer == nil, let parent = window?.sheetParent else { return }
+            onChange?(parent.contentLayoutRect.size)
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification, object: parent, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onChange?(parent.contentLayoutRect.size) }
+            }
+        }
     }
 }
