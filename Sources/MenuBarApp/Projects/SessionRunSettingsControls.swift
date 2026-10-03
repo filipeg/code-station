@@ -8,11 +8,13 @@ struct SessionRunSettingsControls: View {
     @Environment(DialogPresenter.self) private var dialogs
 
     let sessionID: UUID
+    var wraps = false
 
     var body: some View {
         if let session = store.session(sessionID) {
             let agent = session.agent
-            HStack(spacing: 10) {
+            let layout = wraps ? AnyLayout(FlowRow(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
+            layout {
                 modelControl(session, lastRan: session.usage?.model(for: agent))
                 effortMenu(agent: agent)
                 switch agent {

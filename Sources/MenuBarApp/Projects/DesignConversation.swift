@@ -2,29 +2,22 @@ import AppKit
 import SwiftUI
 
 enum DesignConversationLayout {
-    static let headerHeight: CGFloat = 49
+    static let headerHeight: CGFloat = 53
 
     static func inset(in workspace: CGSize) -> CGFloat {
         min(workspace.width < 720 ? 12 : 22, max(0, min(workspace.width, workspace.height) / 2))
     }
 
-    static func size(in workspace: CGSize, expanded: Bool) -> CGSize {
+    static func size(in workspace: CGSize, expanded: Bool, historyHidden: Bool = false) -> CGSize {
         let margin = inset(in: workspace) * 2
         let available = CGSize(width: max(0, workspace.width - margin),
                                height: max(0, workspace.height - margin))
         guard expanded else {
-            return CGSize(width: min(405, available.width), height: min(144, available.height))
+            return CGSize(width: min(660, available.width), height: min(historyHidden ? 220 : 326, available.height))
         }
-        let narrow = workspace.width < 720
-        return CGSize(width: min(available.width, workspace.width * (narrow ? 0.94 : 0.90)),
-                      height: min(available.height, workspace.height * (narrow ? 0.94 : 0.88)))
+        return available
     }
 
-    static func preview(_ messages: [ChatMessage]) -> String {
-        guard let text = messages.last(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })?.text
-        else { return "Describe what to design in the prompt below." }
-        return String(text.split(whereSeparator: \.isNewline).suffix(3).joined(separator: "\n").suffix(500))
-    }
 }
 
 // Observe outside presses without taking them away from the canvas or composer.

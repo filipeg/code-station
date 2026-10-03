@@ -8,30 +8,24 @@ struct DesignConversationLayoutTests {
         for workspace in [CGSize(width: 1200, height: 800), CGSize(width: 480, height: 600),
                           CGSize(width: 280, height: 120), .zero] {
             for expanded in [false, true] {
-                let size = DesignConversationLayout.size(in: workspace, expanded: expanded)
-                let inset = DesignConversationLayout.inset(in: workspace)
-                #expect(size.width >= 0 && size.height >= 0)
-                #expect(size.width + inset * 2 <= workspace.width)
-                #expect(size.height + inset * 2 <= workspace.height)
+                for hidden in [false, true] {
+                    let size = DesignConversationLayout.size(in: workspace, expanded: expanded, historyHidden: hidden)
+                    let inset = DesignConversationLayout.inset(in: workspace)
+                    #expect(size.width >= 0 && size.height >= 0)
+                    #expect(size.width + inset * 2 <= workspace.width)
+                    #expect(size.height + inset * 2 <= workspace.height)
+                }
             }
         }
         let workspace = CGSize(width: 1200, height: 800)
+        #expect(DesignConversationLayout.size(in: workspace, expanded: false, historyHidden: true)
+                == CGSize(width: 660, height: 220))
         #expect(DesignConversationLayout.size(in: workspace, expanded: false)
-                == CGSize(width: 405, height: 144))
+                == CGSize(width: 660, height: 326))
         #expect(DesignConversationLayout.size(in: workspace, expanded: true)
-                == CGSize(width: 1080, height: 704))
+                == CGSize(width: 1156, height: 756))
         #expect(DesignConversationLayout.size(in: CGSize(width: 600, height: 600), expanded: true)
-                == CGSize(width: 564, height: 564))
-    }
-
-    @Test func previewUsesLatestLinesAndSkipsEmptyToolMessages() {
-        let messages = [ChatMessage(role: .user, text: "Earlier prompt"),
-                        ChatMessage(role: .assistant, text: "First\nSecond\nThird\nFourth"),
-                        ChatMessage(role: .assistant, text: " \n")]
-        #expect(DesignConversationLayout.preview(messages) == "Second\nThird\nFourth")
-        #expect(!DesignConversationLayout.preview([]).isEmpty)
-        #expect(DesignConversationLayout.preview([ChatMessage(role: .assistant,
-            text: String(repeating: "x", count: 1000) + "latest")]).hasSuffix("latest"))
+                == CGSize(width: 576, height: 576))
     }
 }
 
@@ -127,7 +121,7 @@ struct DesignConversationViewTests {
             $0 as? DesignConversationDismissal.ObserverView
         }.first)
         #expect(!observer.expanded)
-        #expect(observer.bounds.size == CGSize(width: 405, height: 144))
+        #expect(observer.bounds.size == CGSize(width: 660, height: 326))
         let composer = try #require(descendants(hosting.view).compactMap { $0 as? NSTextView }.first { $0.isEditable })
         let composerFrame = composer.convert(composer.bounds, to: nil)
         let transcript = try #require(descendants(hosting.view).compactMap { $0 as? NSScrollView }.first {
@@ -135,13 +129,11 @@ struct DesignConversationViewTests {
         })
         let viewport = try #require(descendants(hosting.view).compactMap { $0 as? DesignCanvasViewport }.first)
         let canvasFrame = viewport.convert(viewport.bounds, to: nil)
-        let transcriptSize = transcript.bounds.size
         let compactFrame = observer.convert(observer.bounds, to: nil)
-        try click(CGPoint(x: compactFrame.midX, y: compactFrame.midY))
+        try click(CGPoint(x: compactFrame.midX, y: compactFrame.maxY - 26))
         try await settle()
         #expect(observer.expanded)
-        #expect(composer.convert(composer.bounds, to: nil) == composerFrame)
-        #expect(transcript.bounds.size == transcriptSize)
+        #expect(abs(composer.convert(composer.bounds, to: nil).minY - composerFrame.minY) < 1)
         #expect(viewport.convert(viewport.bounds, to: nil) == canvasFrame)
         let selectedText = try #require(descendants(transcript).compactMap { $0 as? NSTextView }.first)
         selectedText.setSelectedRange(NSRange(location: 2, length: 4))
@@ -170,11 +162,27 @@ struct DesignConversationViewTests {
         }
         try await settle()
         #expect(observer.expanded)
-        #expect(transcript.documentVisibleRect == readingPosition)
+        #expect(abs(transcript.documentVisibleRect.minY - readingPosition.minY) < 1)
+        #expect(transcript.documentVisibleRect.size == readingPosition.size)
         #expect(descendants(hosting.view).contains { $0 === composer })
         #expect(descendants(hosting.view).contains { $0 === transcript })
         #expect(descendants(hosting.view).contains { $0 === viewport })
         #expect(selectedText.selectedRange() == NSRange(location: 2, length: 4))
+        let attachment = Attachment(url: scratch.path("reference.png"))
+        runner.attach([attachment], to: session.id)
+        try await settle()
+        let expandedFrame = observer.convert(observer.bounds, to: nil)
+        try click(CGPoint(x: expandedFrame.maxX - 28, y: expandedFrame.maxY - 26))
+        try await settle()
+        #expect(!observer.expanded)
+        #expect(observer.bounds.height == 220)
+        #expect(runner.draft(session.id).text == "Keep this draft")
+        #expect(runner.draft(session.id).attachments == [attachment])
+        #expect(descendants(hosting.view).contains { $0 === composer })
+        let hiddenFrame = observer.convert(observer.bounds, to: nil)
+        try click(CGPoint(x: hiddenFrame.maxX - 28, y: hiddenFrame.maxY - 26))
+        try await settle()
+        #expect(observer.bounds.height == 326)
         for width: CGFloat in [480, 700, 1000] {
             window.setContentSize(CGSize(width: width, height: 800))
             try await settle()

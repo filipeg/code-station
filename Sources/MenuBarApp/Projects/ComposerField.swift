@@ -34,6 +34,7 @@ struct ComposerField<TrailingAccessory: View>: View {
     // Past this the box stops growing and the text scrolls inside it, so a long prompt
     // can never push the transcript off the screen.
     private let maxLines = 10
+    var minimumLines: Int = 1
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var height: CGFloat = 0
@@ -47,6 +48,7 @@ struct ComposerField<TrailingAccessory: View>: View {
          commandNames: Set<String> = [],
          onSuggestionKey: ((SuggestionKey) -> Bool)? = nil,
          onCommandKey: ((CommandKey) -> Bool)? = nil,
+         minimumLines: Int = 1,
          @ViewBuilder trailingAccessory: () -> TrailingAccessory) {
         _text = text
         _isFocused = isFocused
@@ -61,6 +63,7 @@ struct ComposerField<TrailingAccessory: View>: View {
         self.onSuggestionKey = onSuggestionKey
         self.onCommandKey = onCommandKey
         self.trailingAccessory = trailingAccessory()
+        self.minimumLines = minimumLines
     }
 
     var body: some View {
@@ -81,7 +84,7 @@ struct ComposerField<TrailingAccessory: View>: View {
                  onCommandKey: onCommandKey,
                  animatesKeyword: !reduceMotion,
                  onHeightChange: { height = $0 })
-            .frame(height: min(max(height, line), line * CGFloat(maxLines)))
+            .frame(height: min(max(height, line * CGFloat(minimumLines)), line * CGFloat(maxLines)))
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
                     Text(placeholder)
@@ -154,6 +157,7 @@ struct TextArea: NSViewRepresentable {
 
         // Still selectable while a turn runs: making it otherwise would push first
         // responder out of the box, and the cursor would not come back when the turn ends.
+        textView.setAccessibilityLabel("Prompt")
         textView.isEditable = isEnabled
         textView.textColor = isEnabled ? .labelColor : .disabledControlTextColor
 

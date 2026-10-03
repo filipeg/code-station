@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// The transcript floats over the canvas; the composer stays below both surfaces.
+// History and the composer share one floating surface over the canvas.
 struct DesignView: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
@@ -16,9 +16,15 @@ struct DesignView: View {
     @State private var canvas = DesignCanvas()
     @State private var composerFocused = false
     @FocusState private var conversationToggleFocused: Bool
+    @FocusState private var historyToggleFocused: Bool
     @State private var conversationExpanded = false
+    @State private var historyHidden = false
     @State private var hasOpenedConversation = false
     @State private var transcriptAtBottom = true
+    @State private var transcriptPosition = ScrollPosition(edge: .bottom)
+    @State private var transcriptOffset: CGFloat = 0
+    @State private var expandedTranscriptOffset: CGFloat?
+    @State private var composerHeight: CGFloat = 167
     @State private var selectionEnabled = false
     @State private var snapshotRequest: DesignSnapshotRequest?
     @State private var preparingHandoff = false
@@ -57,92 +63,106 @@ struct DesignView: View {
     // MARK: - Conversation
 
     private func floatingConversation(_ session: ChatSession, size: CGSize) -> some View {
-        let expandedSize = DesignConversationLayout.size(in: size, expanded: true)
-        let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded)
+        let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded, historyHidden: historyHidden)
+        let footerHeight = min(max(167, composerHeight), max(0, panelSize.height - DesignConversationLayout.headerHeight))
         let needsYou = runner.question(sessionID) != nil || runner.waitIsStale(sessionID)
             || hasTurnEndAction(runner.state(sessionID))
         return VStack(spacing: 0) {
-            Button {
-                conversationExpanded.toggle()
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: "bubble.left")
-                        .foregroundStyle(Theme.accent)
-                    Text("Conversation")
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer(minLength: 4)
-                    if needsYou {
-                        StateLight(tone: .needsYou, size: 6)
-                        Text("Needs you").foregroundStyle(Theme.attentionText)
-                    } else if runner.state(sessionID).isBusy {
-                        StateLight(tone: .running, size: 6)
-                        Text("Working").foregroundStyle(.secondary)
-                    } else {
-                        Text(conversationExpanded ? "Collapse" : "Expand")
-                            .foregroundStyle(.secondary)
+            HStack(spacing: 0) {
+                Button {
+                    conversationExpanded.toggle()
+                    historyHidden = false
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "bubble.left")
+                            .foregroundStyle(Theme.accent)
+                        Text("Conversation")
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer(minLength: 4)
+                        if needsYou {
+                            StateLight(tone: .needsYou, size: 6)
+                            Text("Needs you").foregroundStyle(Theme.attentionText)
+                        } else if runner.state(sessionID).isBusy {
+                            StateLight(tone: .running, size: 6)
+                            Text("Working").foregroundStyle(.secondary)
+                        } else {
+                            Text(conversationExpanded ? "Collapse" : "Expand")
+                                .foregroundStyle(.secondary)
+                        }
+                        Image(systemName: conversationExpanded ? "chevron.down" : "arrow.up.left.and.arrow.down.right")
                     }
-                    Image(systemName: conversationExpanded ? "chevron.down" : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 18)
+                    .frame(height: DesignConversationLayout.headerHeight)
+                    .contentShape(Rectangle())
                 }
-                .font(.system(size: 11))
-                .padding(.horizontal, 18)
-                .frame(height: DesignConversationLayout.headerHeight)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .focusable()
-            .focused($conversationToggleFocused)
-            .focusEffectDisabled()
-            .onKeyPress(keys: [.space, .return]) { _ in
-                conversationExpanded.toggle()
-                return .handled
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(conversationToggleFocused ? Theme.accent : .clear, lineWidth: 2)
-                    .padding(4)
-                    .allowsHitTesting(false)
-            }
-            .accessibilityLabel("Conversation")
-            .accessibilityValue((conversationExpanded ? "Expanded" : "Collapsed")
-                + (needsYou ? ", needs you" : runner.state(sessionID).isBusy ? ", working" : ""))
-            .accessibilityHint(conversationExpanded ? "Collapse the transcript" : "Expand the transcript")
-
-            ZStack(alignment: .topLeading) {
-                // Its reading size and identity stay fixed while the outer card folds.
-                transcript(session, width: expandedSize.width)
-                    .frame(width: expandedSize.width,
-                           height: max(0, expandedSize.height - DesignConversationLayout.headerHeight))
-                    .background(Theme.background)
-                    .opacity(conversationExpanded ? 1 : 0)
-                    .allowsHitTesting(conversationExpanded)
-                    .disabled(!conversationExpanded)
-                    .accessibilityHidden(!conversationExpanded)
-
-                if !conversationExpanded {
-                    Button { conversationExpanded = true } label: {
-                        Text(DesignConversationLayout.preview(session.messages))
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                            .lineSpacing(4)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .frame(height: 56, alignment: .bottomLeading)
-                            .clipped()
-                            .frame(maxHeight: .infinity, alignment: .topLeading)
-                            .padding(.horizontal, 18)
-                            .padding(.bottom, 16)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .frame(width: panelSize.width,
-                           height: max(0, panelSize.height - DesignConversationLayout.headerHeight))
-                    .accessibilityLabel("Expand conversation. " + DesignConversationLayout.preview(session.messages))
+                .buttonStyle(.plain)
+                .focusable()
+                .focused($conversationToggleFocused)
+                .focusEffectDisabled()
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    conversationExpanded.toggle()
+                    historyHidden = false
+                    return .handled
                 }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(conversationToggleFocused ? Theme.accent : .clear, lineWidth: 2)
+                        .padding(4)
+                        .allowsHitTesting(false)
+                }
+                .accessibilityLabel("Conversation")
+                .accessibilityValue((conversationExpanded ? "Expanded" : "Collapsed")
+                    + (needsYou ? ", needs you" : runner.state(sessionID).isBusy ? ", working" : ""))
+                .accessibilityHint(conversationExpanded ? "Collapse the transcript" : "Expand the transcript")
+
+                Button {
+                    historyHidden.toggle()
+                    conversationExpanded = false
+                } label: {
+                    Image(systemName: historyHidden ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11))
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable()
+                .focused($historyToggleFocused)
+                .focusEffectDisabled()
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    historyHidden.toggle()
+                    conversationExpanded = false
+                    return .handled
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(historyToggleFocused ? Theme.accent : .clear, lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+                .accessibilityLabel(historyHidden ? "Show conversation history" : "Hide conversation history")
+                .accessibilityValue(historyHidden ? "Hidden" : "Visible")
+                .padding(.trailing, 12)
             }
-            .frame(width: panelSize.width,
-                   height: max(0, panelSize.height - DesignConversationLayout.headerHeight),
-                   alignment: .topLeading)
-            .clipped()
+
+            transcript(session, width: panelSize.width)
+                .frame(width: panelSize.width,
+                       height: historyHidden ? 0 : max(0, panelSize.height - DesignConversationLayout.headerHeight - footerHeight))
+                .clipped()
+                .allowsHitTesting(!historyHidden)
+                .accessibilityHidden(historyHidden)
+            Divider().overlay(Theme.hairline)
+            ScrollView {
+                VStack(spacing: 0) {
+                    turnNotices(session)
+                    designComposer(session)
+                    SessionRunSettingsControls(sessionID: sessionID, wraps: true)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 12)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: .infinity)
         }
         .frame(width: panelSize.width, height: panelSize.height)
         .background(Theme.card)
@@ -162,6 +182,7 @@ struct DesignView: View {
             }
         })
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: historyHidden)
     }
 
     private func transcript(_ session: ChatSession, width: CGFloat) -> some View {
@@ -169,6 +190,16 @@ struct DesignView: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    if session.messages.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("What would you like to design?")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("Describe a screen, or attach a reference to get started.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     ForEach(session.messages) { message in
                         MessageView(message: message,
                                     projectPath: projectPath,
@@ -191,11 +222,28 @@ struct DesignView: View {
                                              latestPromptID: latestPromptID))
             }
             .defaultScrollAnchor(.bottom)
+            .scrollPosition($transcriptPosition)
             .onChange(of: conversationExpanded) { _, expanded in
-                if expanded && !hasOpenedConversation {
-                    proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+                if expanded {
+                    if !hasOpenedConversation {
+                        proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+                    }
                     hasOpenedConversation = true
+                } else {
+                    expandedTranscriptOffset = transcriptOffset
                 }
+            }
+            .task(id: conversationExpanded) {
+                guard conversationExpanded, let offset = expandedTranscriptOffset else { return }
+                // Restore after the width transition has finished reflowing message text.
+                if !reduceMotion { try? await Task.sleep(for: .milliseconds(280)) }
+                guard !Task.isCancelled else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { transcriptPosition.scrollTo(y: offset) }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
+                transcriptOffset = offset
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentSize.height - geometry.visibleRect.maxY < 28
@@ -203,7 +251,7 @@ struct DesignView: View {
                 transcriptAtBottom = atBottom
             }
             .onChange(of: transcriptShape(session)) {
-                if conversationExpanded && transcriptAtBottom {
+                if !historyHidden && transcriptAtBottom {
                     proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
                 }
             }
@@ -282,14 +330,13 @@ struct DesignView: View {
                         blocked: blocked,
                         isFocused: $composerFocused,
                         placeholder: composerPlaceholder(session),
-                        inset: 12,
+                        inset: 14,
+                        minimumLines: 3,
                         onOversizedPaste: attachPastedText,
                         onRecallUp: { runner.recallEarlier(sessionID, store: store) },
                         onRecallDown: { runner.recallLater(sessionID, store: store) },
+                        onSend: { historyHidden = false },
                         above: {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                SessionRunSettingsControls(sessionID: sessionID)
-                            }
                             let queued = runner.queued(sessionID).count
                             if queued > 0 {
                                 Text(counted(queued, "prompt") + " queued")
@@ -298,10 +345,19 @@ struct DesignView: View {
                             }
                         },
                         accessory: {
-                            Image(systemName: "paintbrush.pointed.fill")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(Theme.accent)
-                                .frame(width: 22, height: 22)
+                            Button {
+                                let urls = FilePicker.chooseFiles(prompt: "Attach", message: "Choose references for this design.")
+                                runner.attach(Attachments.fromDrop(urls), to: sessionID)
+                                composerFocused = true
+                            } label: {
+                                Image(systemName: "paperclip")
+                                    .foregroundStyle(Theme.accent)
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(blocked)
+                            .accessibilityLabel("Attach a reference")
                         })
     }
 
@@ -444,9 +500,6 @@ struct DesignView: View {
                             .padding(.bottom, toolbarHeight)
                     }
             }
-            Divider().overlay(Theme.hairline)
-            turnNotices(session)
-            designComposer(session)
         }
     }
 

@@ -21,6 +21,7 @@ struct Composer<Above: View, Accessory: View>: View {
     let placeholder: String
     // The side margin, which the narrow Design pane keeps smaller.
     var inset: CGFloat = 20
+    var minimumLines: Int = 1
     let onOversizedPaste: (String) -> Void
     var onRecallUp: (() -> Bool)? = nil
     var onRecallDown: (() -> Bool)? = nil
@@ -89,7 +90,8 @@ struct Composer<Above: View, Accessory: View>: View {
                               highlightsKeyword: agent == .claudeCode,
                               commandNames: Set(commands.map { $0.name.lowercased() }),
                               onSuggestionKey: onSuggestionKey,
-                              onCommandKey: commandKey) {
+                              onCommandKey: commandKey,
+                              minimumLines: minimumLines) {
                     accessory
                 }
 
@@ -104,6 +106,7 @@ struct Composer<Above: View, Accessory: View>: View {
                     }
                     .buttonStyle(.plain)
                     .hoverLift(amount: Motion.smallLift)
+                    .accessibilityLabel(busy ? "Queue prompt" : "Send prompt")
                     .appTooltip(busy ? "Queue this for when the turn ends"
                                      : "Send (shift-return for a new line)")
                     .transition(.fadeIn)
@@ -127,6 +130,7 @@ struct Composer<Above: View, Accessory: View>: View {
                     }
                     .buttonStyle(.plain)
                     .hoverLift(amount: Motion.smallLift)
+                    .accessibilityLabel("Stop this turn")
                     .appTooltip("Stop this turn (esc)")
                 } else if !canSend {
                     // The button keeps its place so the field does not change width as
