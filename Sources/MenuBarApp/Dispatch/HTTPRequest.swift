@@ -216,6 +216,54 @@ struct SavedRequest: Identifiable, Codable, Equatable {
     private static func queryEncoded(_ text: String) -> String {
         text.addingPercentEncoding(withAllowedCharacters: queryAllowed) ?? text
     }
+
+    // The body as it goes on the wire. Only a form body is changed on the way out.
+    var sentBody: String {
+        bodyType == .form ? Self.formEncoded(body) : body
+    }
+
+    // The Form editor holds one key=value pair per line, since that is how a form reads,
+    // but on the wire the pairs are joined with &. An & inside a line still splits it,
+    // so a body typed on one line, the way it is sent, keeps working.
+    static func formEncoded(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isNewline || $0 == "&" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .map { pair in
+                guard let equals = pair.firstIndex(of: "=") else { return formEncodedPart(pair) }
+                return formEncodedPart(String(pair[..<equals])) + "="
+                    + formEncodedPart(String(pair[pair.index(after: equals)...]))
+            }
+            .joined(separator: "&")
+    }
+
+    // Everything outside the plain letters and marks is escaped, so a + or / in a client
+    // secret reaches the server as itself rather than as a space or a broken pair. A %
+    // that already starts an escape is kept, so a value copied from an encoded body is
+    // not encoded twice.
+    private static func formEncodedPart(_ text: String) -> String {
+        let bytes = Array(text.utf8)
+        var encoded = ""
+        for (index, byte) in bytes.enumerated() {
+            let startsEscape = byte == UInt8(ascii: "%") && index + 2 < bytes.count
+                && isHexDigit(bytes[index + 1]) && isHexDigit(bytes[index + 2])
+            if startsEscape || formUnreserved.contains(byte) {
+                encoded.append(Character(Unicode.Scalar(byte)))
+            } else {
+                encoded += String(format: "%%%02X", byte)
+            }
+        }
+        return encoded
+    }
+
+    private static let formUnreserved = Set(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~".utf8)
+
+    private static func isHexDigit(_ byte: UInt8) -> Bool {
+        (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+            || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte)
+            || (UInt8(ascii: "A")...UInt8(ascii: "F")).contains(byte)
+    }
 }
 
 // Folders and requests are saved together so moving a request only changes one local

@@ -812,6 +812,10 @@ private struct RequestDetail: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if draft.bodyType == .form {
+                    Text("One key=value per line. Each pair is URL-encoded and joined with &.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
                 TextEditor(text: $draft.body)
                     .font(.mono(12))

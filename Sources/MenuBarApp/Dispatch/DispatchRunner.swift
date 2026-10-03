@@ -190,8 +190,8 @@ final class DispatchRunner {
         // The body stays saved on a method that cannot carry one, so switching back
         // brings it back.
         var body: String?
-        if request.method.canCarryBody, request.bodyType != .none, !request.body.isEmpty {
-            body = request.body
+        if request.method.canCarryBody, request.bodyType != .none, !request.sentBody.isEmpty {
+            body = request.sentBody
             // A Content-Type typed by hand is the more deliberate choice, so the one
             // implied by the body type only fills a gap.
             if !headers.contains(where: { $0.key.caseInsensitiveCompare("Content-Type") == .orderedSame }),
