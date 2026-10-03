@@ -59,6 +59,34 @@ struct DesignConversationDismissalTests {
         #expect(observer.handle(outside, frontmost: window) === outside)
         #expect(collapses == [false])
     }
+
+    @Test func pressesOnTheFoldedPanelBodyExpandItButNotOnTheHeaderOrOutside() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let observer = DesignConversationDismissal.ObserverView(frame: CGRect(x: 20, y: 20, width: 405, height: 144))
+        window.contentView?.addSubview(observer)
+        defer { observer.stop() }
+        var expands = 0
+        observer.expand = { expands += 1 }
+        func click(_ point: CGPoint) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: point,
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        let header = try click(CGPoint(x: 100, y: 150))
+        #expect(observer.handle(header, frontmost: window) === header)
+        _ = observer.handle(try click(CGPoint(x: 600, y: 400)), frontmost: window)
+        #expect(expands == 0)
+        let body = try click(CGPoint(x: 100, y: 60))
+        #expect(observer.handle(body, frontmost: window) === body)
+        #expect(expands == 1)
+        observer.enabled = false
+        _ = observer.handle(body, frontmost: window)
+        observer.enabled = true
+        observer.expanded = true
+        _ = observer.handle(body, frontmost: window)
+        #expect(expands == 1)
+    }
 }
 
 @MainActor

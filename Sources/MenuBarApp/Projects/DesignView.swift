@@ -173,14 +173,19 @@ struct DesignView: View {
         }
         .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 8)
         .background(DesignConversationDismissal(
-            expanded: conversationExpanded && dialogs.current == nil && !menus.isOpen
-        ) { keyboard in
-            conversationExpanded = false
-            if keyboard {
-                composerFocused = false
-                conversationToggleFocused = true
-            }
-        })
+            expanded: conversationExpanded,
+            enabled: dialogs.current == nil && !menus.isOpen,
+            collapse: { keyboard in
+                conversationExpanded = false
+                if keyboard {
+                    composerFocused = false
+                    conversationToggleFocused = true
+                }
+            },
+            expand: {
+                conversationExpanded = true
+                historyHidden = false
+            }))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: historyHidden)
     }

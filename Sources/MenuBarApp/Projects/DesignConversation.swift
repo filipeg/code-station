@@ -20,23 +20,30 @@ enum DesignConversationLayout {
 
 }
 
-// Observe outside presses without taking them away from the canvas or composer.
+// Observe presses without taking them away from the canvas or composer: a press on the
+// folded panel opens it, and a press outside the open panel folds it.
 struct DesignConversationDismissal: NSViewRepresentable {
     let expanded: Bool
+    let enabled: Bool
     let collapse: (Bool) -> Void
+    let expand: () -> Void
 
     func makeNSView(context: Context) -> ObserverView { ObserverView() }
 
     func updateNSView(_ view: ObserverView, context: Context) {
         view.expanded = expanded
+        view.enabled = enabled
         view.collapse = collapse
+        view.expand = expand
     }
 
     static func dismantleNSView(_ view: ObserverView, coordinator: ()) { view.stop() }
 
     final class ObserverView: NSView {
         var expanded = false
+        var enabled = true
         var collapse: ((Bool) -> Void)?
+        var expand: (() -> Void)?
         private var monitor: Any?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -58,11 +65,22 @@ struct DesignConversationDismissal: NSViewRepresentable {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             collapse = nil
+            expand = nil
         }
 
         func handle(_ event: NSEvent, frontmost: NSWindow?) -> NSEvent? {
-            guard expanded, !isHiddenOrHasHiddenAncestor, let window,
+            guard enabled, !isHiddenOrHasHiddenAncestor, let window,
                   event.window === window, window.attachedSheet == nil else { return event }
+            let point = convert(event.locationInWindow, from: nil)
+            guard expanded else {
+                // The header has its own fold buttons, so a press there is left to them.
+                let header = isFlipped ? point.y < DesignConversationLayout.headerHeight
+                    : point.y > bounds.maxY - DesignConversationLayout.headerHeight
+                if event.type == .leftMouseDown, bounds.contains(point), !header {
+                    expand?()
+                }
+                return event
+            }
             if event.type == .keyDown {
                 guard event.keyCode == 53,
                       WindowKeyMonitor.routes(to: window, frontmost: frontmost)
@@ -70,7 +88,7 @@ struct DesignConversationDismissal: NSViewRepresentable {
                 collapse?(true)
                 return nil
             }
-            if !bounds.contains(convert(event.locationInWindow, from: nil)) {
+            if !bounds.contains(point) {
                 collapse?(false)
             }
             return event
