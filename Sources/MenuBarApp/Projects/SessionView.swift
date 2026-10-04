@@ -955,8 +955,7 @@ struct SessionView: View {
 
     private func showsDirectoryBar(for session: ChatSession, designFilesURL: URL?) -> Bool {
         switch tab {
-        case .conversation, .design, .troubleshoot: false
-        case .changes: store.checkoutProjects(for: session).count > 1
+        case .conversation, .design, .troubleshoot, .changes: false
         case .explorer:
             designFilesURL != nil || store.checkoutProjects(for: session).count > 1
         }
@@ -965,7 +964,7 @@ struct SessionView: View {
     private func sessionDirectoryBar(_ session: ChatSession, designFilesURL: URL?) -> some View {
         ScrollView(.horizontal) {
             HStack(spacing: 6) {
-                if tab == .explorer, designFilesURL != nil {
+                if designFilesURL != nil {
                     Button { explorerShowsDesignFiles = true } label: {
                         HStack(spacing: 7) {
                             Image(systemName: "paintbrush.pointed.fill")
@@ -994,11 +993,11 @@ struct SessionView: View {
                         let root = checkout.worktreePath ?? project.path
                         let snapshot = gitStats.snapshot(at: root)
                         let selected = selectedProjectID == project.id
-                            && (tab == .changes || !explorerShowsDesignFiles)
+                            && !explorerShowsDesignFiles
                         Button {
                             selectedProjectID = project.id
                             requestedChange = nil
-                            if tab == .explorer { explorerShowsDesignFiles = false }
+                            explorerShowsDesignFiles = false
                         } label: {
                             HStack(spacing: 7) {
                                 RoundedRectangle(cornerRadius: 3)
