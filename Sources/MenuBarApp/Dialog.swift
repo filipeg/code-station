@@ -252,10 +252,13 @@ private struct ImpactDialogCard: View {
                         VStack(spacing: 0) {
                             ForEach(Array(impact.rows.enumerated()), id: \.offset) { _, row in
                                 Rectangle().fill(Theme.border).frame(height: 1)
-                                HStack(alignment: .top, spacing: 12) {
+                                HStack(alignment: .center, spacing: 14) {
                                     Image(systemName: row.kept ? "checkmark" : "minus")
+                                        .font(.system(size: 19, weight: .medium))
                                         .foregroundStyle(row.kept ? Theme.accent : Theme.deletion)
-                                        .frame(width: 20)
+                                        .frame(width: 34, height: 34)
+                                        .background(row.kept ? Theme.accent.opacity(0.10) : Theme.warningBackground,
+                                                    in: Circle())
                                         .accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 5) {
                                         Text(row.title).font(.system(size: 13, weight: .medium))
