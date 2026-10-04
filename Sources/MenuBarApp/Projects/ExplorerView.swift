@@ -1122,21 +1122,24 @@ struct ExplorerView: View {
     }
 
     private func save(_ node: FileNode) {
+        let saved = draft
+        let expectedModification = loadedAt
         Task {
-            guard await FileTree.modified(of: node.url) == loadedAt else {
+            let modified = await FileTree.modified(of: node.url)
+            guard selected?.path == node.path else { return }
+            guard modified == expectedModification else {
                 dialogs.show(.confirm(
                     "The file has changed",
                     message: "\(node.name) was written by something else since it was opened here. Saving replaces what is on disk now.",
-                    action: "Save anyway") { write(node) })
+                    action: "Save anyway") { write(node, text: saved) })
                 return
             }
-            write(node)
+            write(node, text: saved)
         }
     }
 
-    private func write(_ node: FileNode) {
+    private func write(_ node: FileNode, text saved: String) {
         Task {
-            let saved = draft
             saving = true
             let failure = await FileTree.write(saved, to: node.url)
             saving = false
@@ -1146,9 +1149,10 @@ struct ExplorerView: View {
             }
             // The pane is left exactly as it is, caret and scroll included. Only what the
             // file is measured against moves on, so the pane reads as clean again.
+            let modified = await FileTree.modified(of: node.url)
             guard selected?.path == node.path else { return }
             original = saved
-            loadedAt = await FileTree.modified(of: node.url)
+            loadedAt = modified
             await reopenFolders()
         }
     }

@@ -464,7 +464,7 @@ enum CommandRunner {
     ) -> Capture {
         var data = Data()
         var truncated = false
-        var lineBuffer = Data()
+        var lines = OutputLineBuffer(limit: limit)
         var inputIsOpen = inputHandle != nil
         var buffer = [UInt8](repeating: 0, count: 16_384)
         let descriptor = handle.fileDescriptor
@@ -522,16 +522,47 @@ enum CommandRunner {
                 act(on: chunkAction(chunk), through: inputHandle)
             }
 
-            if let lineHandler, let inputHandle, lineBuffer.count <= limit {
-                lineBuffer.append(chunk.prefix(max(0, limit - lineBuffer.count)))
-                while let newline = lineBuffer.firstIndex(of: 0x0A) {
-                    let line = String(decoding: lineBuffer[..<newline], as: UTF8.self)
-                    lineBuffer.removeSubrange(...newline)
+            if let lineHandler, let inputHandle {
+                lines.append(chunk) { line in
                     act(on: lineHandler(line), through: inputHandle)
                 }
             }
         }
         return Capture(data: data, truncated: truncated)
+    }
+
+    // An oversized line is skipped whole so its tail cannot be mistaken for a reply.
+    struct OutputLineBuffer {
+        let limit: Int
+        private var pending = Data()
+        private var discarding = false
+
+        init(limit: Int) {
+            precondition(limit > 0)
+            self.limit = limit
+        }
+
+        mutating func append(_ chunk: Data, onLine: (String) -> Void) {
+            var remaining = chunk[...]
+            while !remaining.isEmpty {
+                let newline = remaining.firstIndex(of: 0x0A)
+                let end = newline ?? remaining.endIndex
+                let part = remaining[..<end]
+                if !discarding {
+                    if part.count <= limit - pending.count {
+                        pending.append(part)
+                    } else {
+                        pending.removeAll(keepingCapacity: true)
+                        discarding = true
+                    }
+                }
+                guard let newline else { return }
+                if !discarding { onLine(String(decoding: pending, as: UTF8.self)) }
+                pending.removeAll(keepingCapacity: true)
+                discarding = false
+                remaining = remaining[remaining.index(after: newline)...]
+            }
+        }
     }
 
     private struct Capture: Sendable {

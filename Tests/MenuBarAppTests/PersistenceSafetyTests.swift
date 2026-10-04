@@ -18,6 +18,28 @@ struct PersistenceSafetyTests {
               ])
     }
 
+    @Test func absentFilesCanBeReadAndRemoved() throws {
+        let file = scratch.path("missing.json")
+        #expect(try PersistentFile.readIfPresent(file) == nil)
+        try PersistentFile.removeIfPresent(file)
+    }
+
+    @Test func removingABrokenLinkRemovesTheLinkItself() throws {
+        let link = scratch.path("broken.json")
+        try FileManager.default.createSymbolicLink(at: link,
+                                                  withDestinationURL: scratch.path("missing.json"))
+        try PersistentFile.removeIfPresent(link)
+        #expect(throws: (any Error).self) {
+            try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+        }
+    }
+
+    @Test func anUnreadableFileIsNotTreatedAsMissing() throws {
+        #expect(throws: (any Error).self) {
+            try PersistentFile.readIfPresent(directory)
+        }
+    }
+
     @Test func configDecodeFailureDoesNotOverwriteTheFile() throws {
         let file = scratch.path("config.json")
         let malformed = Data("not config json".utf8)

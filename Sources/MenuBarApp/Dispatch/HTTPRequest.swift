@@ -201,7 +201,13 @@ struct SavedRequest: Identifiable, Codable, Equatable {
             .map { "\(Self.queryEncoded($0.key))=\(Self.queryEncoded($0.value))" }
             .joined(separator: "&")
         guard !query.isEmpty else { return expanded }
-        return expanded + (expanded.contains("?") ? "&" : "?") + query
+        let fragmentStart = expanded.firstIndex(of: "#") ?? expanded.endIndex
+        let address = expanded[..<fragmentStart]
+        let fragment = expanded[fragmentStart...]
+        let separator = address.contains("?")
+            ? (address.hasSuffix("?") || address.hasSuffix("&") ? "" : "&")
+            : "?"
+        return address + separator + query + fragment
     }
 
     // A space or & in a value must not change the URL's shape. Braces stay as typed so

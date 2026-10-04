@@ -34,6 +34,11 @@ struct ProcessManagerResolveTests {
         #expect(ProcessManager.resolve(scratch.path("missing").path) == nil)
     }
 
+    @Test func aSearchableDirectoryIsNotAnExecutable() {
+        let scratch = ScratchDirectory(prefix: "resolve-directory")
+        #expect(ProcessManager.resolve(scratch.url.path) == nil)
+    }
+
     @Test func aNameThatIsNowhereOnThePathDoesNotResolve() {
         #expect(ProcessManager.resolve("code-station-absent-\(UUID().uuidString)") == nil)
     }

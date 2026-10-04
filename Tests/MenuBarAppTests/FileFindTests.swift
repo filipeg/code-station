@@ -35,6 +35,19 @@ struct FileFindTests {
         #expect(FileFind.search("", in: "anything") == FileFindResult())
     }
 
+    @Test func preservesUTF16OffsetsAfterCombiningCharacters() {
+        let text = "e\u{301}🙂 FIND e\u{301}🙂 find"
+        let result = FileFind.search("find", in: text)
+        #expect(result.matches == [NSRange(location: 5, length: 4),
+                                   NSRange(location: 15, length: 4)])
+    }
+
+    @Test func anExactLimitDoesNotReportMoreMatches() {
+        let result = FileFind.search("a", in: String(repeating: "a", count: FileFind.matchLimit))
+        #expect(result.matches.count == FileFind.matchLimit)
+        #expect(!result.hasMore)
+    }
+
     @Test func limitsResultsFromPathologicalQueries() {
         let text = String(repeating: "a", count: FileFind.matchLimit + 1)
         let result = FileFind.search("a", in: text)

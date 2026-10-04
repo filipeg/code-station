@@ -28,7 +28,7 @@ struct WebSocketFrameDecoder {
         case messageTooLarge
     }
 
-    private var buffer = Data()
+    private var buffer: [UInt8] = []
     private let maximumMessageSize: Int
 
     init(maximumMessageSize: Int = 1024 * 1024) {
@@ -36,27 +36,29 @@ struct WebSocketFrameDecoder {
     }
 
     mutating func append(_ data: Data) throws -> [Event] {
-        buffer.append(data)
+        buffer.append(contentsOf: data)
         var events: [Event] = []
 
+        var consumed = 0
+        defer { buffer.removeFirst(consumed) }
         while true {
-            let bytes = [UInt8](buffer)
+            let bytes = buffer[consumed...]
             guard bytes.count >= 2 else { return events }
 
-            let final = bytes[0] & 0x80 != 0
-            let opcode = bytes[0] & 0x0F
-            let masked = bytes[1] & 0x80 != 0
-            var length = Int(bytes[1] & 0x7F)
-            var cursor = 2
+            let final = bytes[consumed] & 0x80 != 0
+            let opcode = bytes[consumed] & 0x0F
+            let masked = bytes[consumed + 1] & 0x80 != 0
+            var length = Int(bytes[consumed + 1] & 0x7F)
+            var cursor = consumed + 2
 
             guard final, masked else { throw Failure.invalidFrame }
 
             if length == 126 {
-                guard bytes.count >= cursor + 2 else { return events }
+                guard buffer.count >= cursor + 2 else { return events }
                 length = Int(bytes[cursor]) << 8 | Int(bytes[cursor + 1])
                 cursor += 2
             } else if length == 127 {
-                guard bytes.count >= cursor + 8 else { return events }
+                guard buffer.count >= cursor + 8 else { return events }
                 var longLength: UInt64 = 0
                 for byte in bytes[cursor..<(cursor + 8)] {
                     longLength = longLength << 8 | UInt64(byte)
@@ -69,14 +71,14 @@ struct WebSocketFrameDecoder {
             }
 
             guard length <= maximumMessageSize else { throw Failure.messageTooLarge }
-            guard bytes.count >= cursor + 4 + length else { return events }
+            guard buffer.count >= cursor + 4 + length else { return events }
 
             let mask = Array(bytes[cursor..<(cursor + 4)])
             cursor += 4
             let payload = Data(bytes[cursor..<(cursor + length)].enumerated().map {
                 $0.element ^ mask[$0.offset % 4]
             })
-            buffer.removeFirst(cursor + length)
+            consumed = cursor + length
 
             switch opcode {
             case 0x1:

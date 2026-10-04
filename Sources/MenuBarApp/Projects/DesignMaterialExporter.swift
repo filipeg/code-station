@@ -50,9 +50,13 @@ enum DesignMaterialExporter {
         }
         guard !entries.isEmpty else { throw ExportError.noMaterials }
 
-        let sourcePath = source.standardizedFileURL.path
-        let destinationPath = destination.standardizedFileURL.path
-        guard !destinationPath.hasPrefix(sourcePath + "/") else {
+        let sourcePath = source.resolvingSymlinksInPath().standardizedFileURL.path
+        // A new archive has no file to resolve yet, but its parent may be a link.
+        let resolvedDestination = destination.standardizedFileURL.resolvingSymlinksInPath()
+        let destinationPath = resolvedDestination.deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(resolvedDestination.lastPathComponent).path
+        guard destinationPath.pathRelative(to: sourcePath) == nil else {
             throw ExportError.destinationInsideMaterials
         }
 

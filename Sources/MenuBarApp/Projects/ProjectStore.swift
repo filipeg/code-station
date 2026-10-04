@@ -636,7 +636,7 @@ final class ProjectStore {
         // two members is not this removal's doing and must not go with it.
         let dissolved = Set(workspaces.filter { workspace in
             workspace.projectIDs.contains(id)
-                && workspace.projectIDs.filter { $0 != id }.count < 2
+                && workspace.projectIDs.count { $0 != id } < 2
         }.map(\.id))
         let affected = Set(sessions.filter { session in
             session.projectID == id

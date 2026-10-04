@@ -34,6 +34,31 @@ struct CommandRunnerTests {
         #expect(output.errorOutputTruncated)
     }
 
+    @Test func lineReaderDeliversAllLinesInALargeChunk() {
+        var buffer = CommandRunner.OutputLineBuffer(limit: 4)
+        var lines: [String] = []
+        buffer.append(Data("one\ntwo\n1234\n\n".utf8)) { lines.append($0) }
+        #expect(lines == ["one", "two", "1234", ""])
+    }
+
+    @Test func lineReaderResumesAfterAnOversizedLine() {
+        var buffer = CommandRunner.OutputLineBuffer(limit: 4)
+        var lines: [String] = []
+        for chunk in ["1234", "5", "tail\nok\npar", "t\n"] {
+            buffer.append(Data(chunk.utf8)) { lines.append($0) }
+        }
+        #expect(lines == ["ok", "part"])
+    }
+
+    @Test func lineReaderPreservesSplitUTF8() {
+        var buffer = CommandRunner.OutputLineBuffer(limit: 4)
+        let bytes = Data("🙂\n".utf8)
+        var lines: [String] = []
+        buffer.append(bytes.prefix(2)) { lines.append($0) }
+        buffer.append(bytes.dropFirst(2)) { lines.append($0) }
+        #expect(lines == ["🙂"])
+    }
+
     @Test func writesStandardInputAndClosesIt() async throws {
         let input = Data("from standard input".utf8)
         let output = try await CommandRunner.run(

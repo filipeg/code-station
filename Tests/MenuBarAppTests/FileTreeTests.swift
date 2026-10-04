@@ -45,6 +45,21 @@ struct FileTreeTests {
         #expect(await FileTree.preview(of: file) == .empty)
     }
 
+    @Test func binaryDetectionDoesNotDiscardInvalidTrailingBytes() {
+        #expect(Data([0x61, 0xFF]).looksBinary)
+        #expect(Data([0x61, 0xE2, 0x82]).looksBinary)
+        #expect(!Data().looksBinary)
+        #expect(!Data("hello🙂".utf8).looksBinary)
+    }
+
+    @Test func binaryDetectionCompletesACharacterAcrossTheSampleBoundary() {
+        let text = String(repeating: "a", count: 7_999) + "🙂tail"
+        #expect(!Data(text.utf8).looksBinary)
+        var invalid = Data(repeating: 0x61, count: 7_999)
+        invalid.append(contentsOf: [0xFF, 0x61, 0x61, 0x61])
+        #expect(invalid.looksBinary)
+    }
+
     @Test func binaryIsRefused() async throws {
         let file = root.appendingPathComponent("blob.bin")
         try Data([0x00, 0x01, 0x02, 0xFF]).write(to: file)

@@ -556,6 +556,24 @@ struct DesignSessionTests {
             atPath: extracted.appendingPathComponent("__MACOSX").path))
     }
 
+    @Test func designArchiveCannotBeWrittenIntoItsSourceThroughALink() async throws {
+        let root = ScratchDirectory(prefix: "design-export-destination")
+        let materials = root.path("materials")
+        try FileManager.default.createDirectory(at: materials, withIntermediateDirectories: true)
+        try Data("<html>Design</html>".utf8)
+            .write(to: materials.appendingPathComponent("index.html"))
+        let alias = root.path("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: materials)
+
+        for destination in [materials, materials.appendingPathComponent("export.zip"),
+                            alias.appendingPathComponent("export.zip")] {
+            await #expect(throws: DesignMaterialExporter.ExportError.destinationInsideMaterials) {
+                try await DesignMaterialExporter.export(materialsAt: materials, to: destination)
+            }
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: materials.path) == ["index.html"])
+    }
+
     @Test func designMaterialArchiveNameIsPortable() {
         let name = DesignMaterialExporter.suggestedFileName(
             projectName: "Checkout/API", sessionTitle: "Landing:\nFirst pass")

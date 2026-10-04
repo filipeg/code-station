@@ -19,6 +19,19 @@ struct SavedRequestParamsTests {
         #expect(request.expandedURL == "https://host/path?a=1&b=2")
     }
 
+    @Test(arguments: [
+        ("https://host/path#section", "https://host/path?b=2#section"),
+        ("https://host/path?a=1#section", "https://host/path?a=1&b=2#section"),
+        ("https://host/path#section?x=1", "https://host/path?b=2#section?x=1"),
+        ("https://host/path?", "https://host/path?b=2"),
+        ("https://host/path?a=1&", "https://host/path?a=1&b=2")
+    ])
+    func insertsQueryBeforeFragment(url: String, expected: String) {
+        let request = SavedRequest(name: "r", url: url,
+                                   queryParams: [HeaderField(key: "b", value: "2")])
+        #expect(request.expandedURL == expected)
+    }
+
     @Test func skipsDisabledAndEmptyKeys() {
         let request = SavedRequest(name: "r", url: "https://host/path",
                                    queryParams: [

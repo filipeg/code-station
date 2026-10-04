@@ -763,7 +763,7 @@ struct ChangesView: View {
     private func confirmDiscard(_ files: [GitChange]) {
         guard !busy, let file = files.first else { return }
         let root = repoRoot
-        let untrackedCount = files.filter(\.isUntracked).count
+        let untrackedCount = files.count(where: \.isUntracked)
         let allUntracked = untrackedCount == files.count
         let multiple = files.count > 1
         let message: String

@@ -2,8 +2,11 @@ import Foundation
 
 enum PersistentFile {
     static func readIfPresent(_ url: URL) throws -> Data? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try Data(contentsOf: url)
+        do {
+            return try Data(contentsOf: url)
+        } catch CocoaError.fileReadNoSuchFile {
+            return nil
+        }
     }
 
     static func write(_ data: Data, to url: URL) throws {
@@ -13,8 +16,11 @@ enum PersistentFile {
     }
 
     static func removeIfPresent(_ url: URL) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        try FileManager.default.removeItem(at: url)
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch CocoaError.fileNoSuchFile {
+            return
+        }
     }
 
     // The shape every store writes. Sorted keys keep a save that changes nothing from

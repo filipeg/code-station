@@ -14,17 +14,18 @@ enum FileFind {
     static func search(_ query: String, in text: String) -> FileFindResult {
         guard !query.isEmpty else { return FileFindResult() }
 
+        let document = text as NSString
         var matches: [NSRange] = []
-        var remaining = text.startIndex..<text.endIndex
-        while let range = text.range(of: query, options: [.caseInsensitive], range: remaining) {
+        var remaining = NSRange(location: 0, length: document.length)
+        while remaining.length > 0 {
+            let range = document.range(of: query, options: .caseInsensitive, range: remaining)
+            guard range.location != NSNotFound, range.length > 0 else { break }
             if matches.count == matchLimit {
                 return FileFindResult(matches: matches, hasMore: true)
             }
-            matches.append(NSRange(range, in: text))
-
-            // A non-empty query always advances, so adjacent matches are found while
-            // overlapping ones are treated the same way as editor find controls.
-            remaining = range.upperBound..<text.endIndex
+            matches.append(range)
+            let next = NSMaxRange(range)
+            remaining = NSRange(location: next, length: document.length - next)
         }
         return FileFindResult(matches: matches)
     }

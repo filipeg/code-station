@@ -527,9 +527,9 @@ extension Data {
     var looksBinary: Bool {
         let head = prefix(8000)
         if head.contains(0) { return true }
-        // A multi-byte character can straddle the cut, so allow a few bytes of slack.
-        for drop in 0...3 where head.count > drop {
-            if String(data: head.dropLast(drop), encoding: .utf8) != nil { return false }
+        // Complete a character cut by the sample without hiding invalid trailing bytes.
+        for end in head.count...Swift.min(count, head.count + 3) {
+            if String(data: prefix(end), encoding: .utf8) != nil { return false }
         }
         return true
     }
