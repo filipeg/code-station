@@ -599,6 +599,7 @@ struct ChangesView: View {
         .contentShape(Rectangle())
         .focusable()
         .focused($listFocused)
+        .focusEffectDisabled()
         .onMoveCommand(perform: moveSelection)
         .task { listFocused = true }
     }
