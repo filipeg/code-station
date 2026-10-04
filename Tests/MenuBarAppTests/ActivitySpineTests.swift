@@ -1,4 +1,5 @@
-import Foundation
+import AppKit
+import SwiftUI
 import Testing
 @testable import MenuBarApp
 
@@ -71,5 +72,48 @@ struct SpineCardTests {
     // the work, not by the call having a result.
     @Test func aCallStillWorkingIsRunningWhateverItsResultSays() {
         #expect(SpineCardState(isWorking: true, isError: true) == .running)
+    }
+}
+
+@MainActor
+struct ActivitySpineLayoutTests {
+    // A transcript that follows the bottom shows a different slice of the spine on every
+    // frame while a turn runs. If the spine's height depended on that slice, the transcript
+    // would keep resizing itself and never settle.
+    @Test func theSpinesHeightDoesNotDependOnHowMuchOfItIsOnScreen() async throws {
+        let nodes = (0..<6).map { index in
+            ToolNode(tool: ToolUse(id: "call-\(index)", name: index == 0 ? "Read" : "Bash",
+                                   input: "{\"command\":\"ls -la\"}"),
+                     order: index)
+        }
+        var heights: Set<CGFloat> = []
+        for viewport in [90.0, 120.0, 151.0, 400.0] {
+            let hosting = NSHostingView(rootView:
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Color.clear.frame(height: 80)
+                        ActivitySpine(nodes: nodes, projectPath: "/tmp")
+                    }
+                    .padding(14)
+                }
+                .defaultScrollAnchor(.bottom)
+                .frame(width: 700, height: viewport))
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 700, height: viewport),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = hosting
+            window.center()
+            window.orderFront(nil)
+            defer { window.orderOut(nil) }
+            for _ in 0..<10 {
+                try await Task.sleep(for: .milliseconds(10))
+                hosting.layoutSubtreeIfNeeded()
+            }
+            func descendants(_ view: NSView) -> [NSView] {
+                view.subviews + view.subviews.flatMap(descendants)
+            }
+            let scroll = try #require(descendants(hosting).compactMap { $0 as? NSScrollView }.first)
+            heights.insert(try #require(scroll.documentView).frame.height)
+        }
+        #expect(heights.count == 1)
     }
 }
