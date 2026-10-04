@@ -98,6 +98,60 @@ struct SidebarStateMarksTests {
         #expect(try width(pinned: true) == width(pinned: false))
     }
 
+    // The sidebar draws its rail one row at a time so a lazy list can skip the rows that
+    // are off screen. It has to look exactly like the rail drawn as one block, with the
+    // line bridging the gaps the list leaves and stopping at the last dot.
+    @Test func aRailDrawnRowByRowMatchesTheWholeRail() throws {
+        let heights: [CGFloat] = [30, 52, 30]
+        let spacing: CGFloat = 1
+
+        func pixels<Content: View>(_ content: Content) throws -> (width: Int, height: Int, data: Data) {
+            let renderer = ImageRenderer(content: content
+                .frame(width: 120, alignment: .topLeading)
+                .background(Color.white)
+                .fixedSize())
+            renderer.scale = 2
+            let image = try #require(renderer.cgImage, "the rail did not render")
+            let data = try #require(image.dataProvider?.data as Data?)
+            return (image.width, image.height, data)
+        }
+
+        // The row the cards hang under. In the whole rail it sits flush on the block; in
+        // the list it is one more row with the list's gap after it.
+        let header = Color.red.frame(height: 10)
+        let whole = try pixels(
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                SidebarRail(colour: .blue) {
+                    ForEach(heights.indices, id: \.self) { i in
+                        SidebarRailRow(colour: .blue, pinned: i == 1) {
+                            Color.clear.frame(height: heights[i])
+                        }
+                    }
+                }
+            })
+        let rowByRow = try pixels(
+            VStack(alignment: .leading, spacing: spacing) {
+                header
+                ForEach(heights.indices, id: \.self) { i in
+                    SidebarRailRow(colour: .blue, pinned: i == 1) {
+                        Color.clear.frame(height: heights[i])
+                    }
+                    .sidebarRailSegment(colour: .blue, isFirst: i == 0,
+                                        isLast: i == heights.count - 1, stackSpacing: spacing)
+                }
+            })
+
+        #expect(rowByRow.width == whole.width)
+        #expect(rowByRow.height == whole.height)
+        // The pin's symbol is smoothed a shade differently from one render to the next,
+        // so its edge pixels may be one step apart. A rail line out of place is far more.
+        let largestDifference = zip(rowByRow.data, whole.data)
+            .map { abs(Int($0) - Int($1)) }
+            .max() ?? 0
+        #expect(largestDifference <= 2)
+    }
+
     // The pin on a tile is decoration, so the row has to say it in words.
     @Test func aPinnedRowSaysSoToVoiceOver() {
         #expect(SidebarRowValue.text(current: nil, viewing: nil, pinned: false) == "")

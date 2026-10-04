@@ -261,7 +261,9 @@ struct AppSidebar: View {
                         // app holds. Every card carries a hint, a menu and hover of its
                         // own, and off-screen ones would still be built and laid out on
                         // each redraw - a streaming reply redraws the rail on every token.
-                        LazyVStack(alignment: .leading, spacing: 1) {
+                        // That only holds while each card is a row of the stack itself:
+                        // a card wrapped in a container is built along with all the rest.
+                        LazyVStack(alignment: .leading, spacing: Self.listSpacing) {
                             ForEach(sections) { section in
                                 if let group = section.group {
                                     SectionHeading(title: group.title,
@@ -276,12 +278,10 @@ struct AppSidebar: View {
                                         case .project(let project):
                                             projectSection(project,
                                                            sessions: grouped[project.id] ?? [])
-                                                .id(project.id)
                                         case .workspace(let workspace):
                                             workspaceSection(
                                                 workspace,
                                                 sessions: workspaceGroups[workspace.id] ?? [])
-                                                .id(workspace.id)
                                         }
                                     }
                                 }
@@ -313,6 +313,8 @@ struct AppSidebar: View {
             }
         }
     }
+
+    private static let listSpacing: CGFloat = 1
 
     private var sections: [SidebarSection] {
         appSettings.projectGrouping.sections(of: orderedItems)
@@ -438,6 +440,7 @@ struct AppSidebar: View {
         }
     }
 
+    @ViewBuilder
     private func workspaceSection(_ workspace: ProjectWorkspace,
                                   sessions: [ChatSession]) -> some View {
         let expanded = isExpanded(workspace)
@@ -445,50 +448,49 @@ struct AppSidebar: View {
         let running = sessions.count { runner.isBusy($0.id, store: store) }
         let projects = workspace.projectIDs.compactMap(store.project)
 
-        return VStack(alignment: .leading, spacing: 0) {
-            WorkspaceHeaderRow(
-                workspace: workspace,
-                projects: projects,
-                selected: store.sidebarDestination?.containerID == workspace.id,
-                activeSessionTitle: activeSessionTitle(in: workspace.id),
-                isExpanded: expanded && !visible.isEmpty,
-                sessionCount: sessions.count,
-                runningCount: running,
-                needsYouCount: needsYouCount(sessions),
-                isRenaming: renamingID == workspace.id,
-                onOpen: { openWorkspace(workspace) },
-                onToggle: { toggleExpanded(workspace.id, expanded: expanded) },
-                onNewSession: { choosingWorkspaceSession = workspace },
-                onRename: { name in
-                    store.renameWorkspace(workspace.id, to: name)
-                    renamingID = nil
-                },
-                onCancelRename: { renamingID = nil }
-            )
-            .appContextMenu {
-                [.item(workspace.isPinned ? "Unpin" : "Pin",
-                       icon: workspace.isPinned ? "pin.slash" : "pin") {
-                     store.setPinned(!workspace.isPinned, forWorkspace: workspace.id)
-                 },
-                 .item("Rename…") { renamingID = workspace.id },
-                 .item("New session") { choosingWorkspaceSession = workspace },
-                 .separator,
-                 .item("Delete workspace", kind: .destructive) {
-                     confirmRemoveWorkspace(workspace)
-                 }]
-            }
-            .sidebarRevealGlow(store.sidebarHighlight == workspace.id)
+        WorkspaceHeaderRow(
+            workspace: workspace,
+            projects: projects,
+            selected: store.sidebarDestination?.containerID == workspace.id,
+            activeSessionTitle: activeSessionTitle(in: workspace.id),
+            isExpanded: expanded && !visible.isEmpty,
+            sessionCount: sessions.count,
+            runningCount: running,
+            needsYouCount: needsYouCount(sessions),
+            isRenaming: renamingID == workspace.id,
+            onOpen: { openWorkspace(workspace) },
+            onToggle: { toggleExpanded(workspace.id, expanded: expanded) },
+            onNewSession: { choosingWorkspaceSession = workspace },
+            onRename: { name in
+                store.renameWorkspace(workspace.id, to: name)
+                renamingID = nil
+            },
+            onCancelRename: { renamingID = nil }
+        )
+        .appContextMenu {
+            [.item(workspace.isPinned ? "Unpin" : "Pin",
+                   icon: workspace.isPinned ? "pin.slash" : "pin") {
+                 store.setPinned(!workspace.isPinned, forWorkspace: workspace.id)
+             },
+             .item("Rename…") { renamingID = workspace.id },
+             .item("New session") { choosingWorkspaceSession = workspace },
+             .separator,
+             .item("Delete workspace", kind: .destructive) {
+                 confirmRemoveWorkspace(workspace)
+             }]
+        }
+        .sidebarRevealGlow(store.sidebarHighlight == workspace.id)
+        .id(workspace.id)
 
-            if expanded, !visible.isEmpty {
-                sessionRail(sessions, visible: visible, in: workspace.id,
-                            tint: sidebarRailTint(for: workspace.sidebarAvatar,
-                                                  name: workspace.name,
-                                                  monogramTint: Theme.workspaceTint),
-                            branch: workspaceBranch,
-                            uncommitted: { session in
-                                store.workingDirectories(for: session).contains(where: workingTrees.isDirty)
-                            })
-            }
+        if expanded, !visible.isEmpty {
+            sessionRail(sessions, visible: visible, in: workspace.id,
+                        tint: sidebarRailTint(for: workspace.sidebarAvatar,
+                                              name: workspace.name,
+                                              monogramTint: Theme.workspaceTint),
+                        branch: workspaceBranch,
+                        uncommitted: { session in
+                            store.workingDirectories(for: session).contains(where: workingTrees.isDirty)
+                        })
         }
     }
 
@@ -503,136 +505,142 @@ struct AppSidebar: View {
             : "\(checkouts.count) repos"
     }
 
+    // The row and its cards are separate rows of the lazy list, so a long list of cards
+    // is only built as far as it is on screen. The gaps around the cards belong to the
+    // cards, so they leave with them and the row does not jump at the end of a close.
+    @ViewBuilder
     private func projectSection(_ project: Project, sessions: [ChatSession]) -> some View {
         let expanded = isExpanded(project)
         let visible = visibleSessions(sessions, in: project.id)
         let running = sessions.count { runner.isBusy($0.id, store: store) }
 
-        // The row and its sessions are one stack so the gap between them belongs to the
-        // block that changes size. An outer spacing would remain after the block leaves,
-        // which reads as the row jumping at the end of the close.
-        return VStack(alignment: .leading, spacing: 0) {
-            ProjectHeaderRow(
-                project: project,
-                selected: store.sidebarDestination?.containerID == project.id,
-                activeSessionTitle: activeSessionTitle(in: project.id),
-                isExpanded: expanded && !visible.isEmpty,
-                isMissing: store.isMissing(project),
-                sessionCount: sessions.count,
-                runningCount: running,
-                finishedCount: store.finishedCount(in: project.id),
-                needsYouCount: needsYouCount(sessions),
-                // A project can hold sessions from either agent, so the total only counts
-                // the ones whose agent is set to show what it spends.
-                cost: sessions.reduce(0) { total, session in
-                    guard appSettings.showsCost(for: session.agent) else { return total }
-                    return total + (session.usage?.costUSD ?? 0)
-                },
-                canRunTask: running == 0,
-                isRenaming: renamingID == project.id,
-                onOpen: { openProject(project) },
-                onToggle: { toggleExpanded(project.id, expanded: expanded) },
-                onNewSession: { requestNewSession(in: project) },
-                onRunTask: { runTask(project) },
-                onRename: { name in
-                    store.renameProject(project.id, to: name)
-                    renamingID = nil
-                },
-                onCancelRename: { renamingID = nil }
-            )
-            .appContextMenu { headerMenu(project) }
-            .sidebarRevealGlow(store.sidebarHighlight == project.id)
+        ProjectHeaderRow(
+            project: project,
+            selected: store.sidebarDestination?.containerID == project.id,
+            activeSessionTitle: activeSessionTitle(in: project.id),
+            isExpanded: expanded && !visible.isEmpty,
+            isMissing: store.isMissing(project),
+            sessionCount: sessions.count,
+            runningCount: running,
+            finishedCount: store.finishedCount(in: project.id),
+            needsYouCount: needsYouCount(sessions),
+            // A project can hold sessions from either agent, so the total only counts
+            // the ones whose agent is set to show what it spends.
+            cost: sessions.reduce(0) { total, session in
+                guard appSettings.showsCost(for: session.agent) else { return total }
+                return total + (session.usage?.costUSD ?? 0)
+            },
+            canRunTask: running == 0,
+            isRenaming: renamingID == project.id,
+            onOpen: { openProject(project) },
+            onToggle: { toggleExpanded(project.id, expanded: expanded) },
+            onNewSession: { requestNewSession(in: project) },
+            onRunTask: { runTask(project) },
+            onRename: { name in
+                store.renameProject(project.id, to: name)
+                renamingID = nil
+            },
+            onCancelRename: { renamingID = nil }
+        )
+        .appContextMenu { headerMenu(project) }
+        .sidebarRevealGlow(store.sidebarHighlight == project.id)
+        .id(project.id)
 
-            // An expanded project with nothing under it draws no block at all: an empty one
-            // still carries its padding, which reads as the row shifting on every click.
-            if expanded, !visible.isEmpty {
-                sessionRail(sessions, visible: visible, in: project.id,
-                            tint: sidebarRailTint(for: project.sidebarAvatar,
-                                                  name: project.name,
-                                                  monogramTint: Theme.projectTint(for: project.name)),
-                            branch: { branch($0, project: project) },
-                            uncommitted: { workingTrees.isDirty(folder($0, project: project)) })
-            }
+        // An expanded project with nothing under it draws no cards at all: an empty rail
+        // still carries its padding, which reads as the row shifting on every click.
+        if expanded, !visible.isEmpty {
+            sessionRail(sessions, visible: visible, in: project.id,
+                        tint: sidebarRailTint(for: project.sidebarAvatar,
+                                              name: project.name,
+                                              monogramTint: Theme.projectTint(for: project.name)),
+                        branch: { branch($0, project: project) },
+                        uncommitted: { workingTrees.isDirty(folder($0, project: project)) })
         }
     }
 
     // The cards under an open row. A project and a workspace draw the same rail; they
     // differ only in what a card says about its branch and whether its folders hold
     // uncommitted work.
+    @ViewBuilder
     private func sessionRail(_ sessions: [ChatSession], visible: [ChatSession],
                              in containerID: UUID, tint: Theme.ProjectTint,
                              branch: @escaping (ChatSession) -> String?,
                              uncommitted: @escaping (ChatSession) -> Bool) -> some View {
-        SidebarRail(colour: tint.colour) {
-            ForEach(visible) { session in
-                let selected = isSelected(session)
-                // Design has no card of its own, so while it is the side working, this
-                // card is what says so: its light, its line and its time come from there.
-                let live = LiveConversation.of(session.id, store: store, runner: runner)
-                    ?? session
-                SidebarRailRow(colour: tint.colour, selectedColour: Theme.accent,
-                               selected: selected, pinned: session.isPinned) {
-                    SessionCard(session: session,
-                                worktrees: store.worktreeCoverage(for: session),
-                                selected: selected,
-                                busy: runner.state(live.id).isBusy,
-                                waiting: runner.state(live.id) == .waiting,
-                                waitIsStale: runner.waitIsStale(live.id),
-                                waitingSince: runner.waitingSince(live.id),
-                                needsInput: runner.question(live.id) != nil,
-                                finished: store.hasFinished(session.id),
-                                activity: activity(live),
-                                branch: branch(session),
-                                uncommitted: uncommitted(session),
-                                connected: mobileAccess.isConnected(session: session.id),
-                                isRenaming: renamingID == session.id,
-                                onOpen: {
-                                    store.selectSession(session.id,
-                                                        destination: destination(for: session),
-                                                        revealingInSidebar: false)
-                                },
-                                onDelete: { confirmRemoveSession(session) },
-                                onRename: { name in
-                                    store.renameSession(session.id, to: name)
-                                    renamingID = nil
-                                },
-                                onCancelRename: { renamingID = nil })
-                        .sidebarRevealGlow(store.sidebarHighlight == session.id)
-                }
-                .id(session.id)
-                .background {
-                    if selected {
-                        GeometryReader { _ in
-                            Color.clear.preference(key: SidebarRenderedSessionsKey.self,
-                                                   value: [session.id])
-                        }
-                    }
-                }
-                .appContextMenu {
-                    [.item(session.isPinned ? "Unpin" : "Pin",
-                           icon: session.isPinned ? "pin.slash" : "pin") {
-                         store.setPinned(!session.isPinned, forSession: session.id)
-                     },
-                     .item("Rename…") { renamingID = session.id },
-                     SessionTitle.menuEntry(for: session.id, runner: runner, store: store),
-                     .separator,
-                     .item("Delete session", kind: .destructive) {
-                         confirmRemoveSession(session)
-                     }]
-                }
+        // The rest of a filtered list is what did not match, so there is nothing to
+        // unfold.
+        let hidden = isFiltering ? 0 : sessions.count - visible.count
+        ForEach(visible) { session in
+            let selected = isSelected(session)
+            // Design has no card of its own, so while it is the side working, this
+            // card is what says so: its light, its line and its time come from there.
+            let live = LiveConversation.of(session.id, store: store, runner: runner)
+                ?? session
+            SidebarRailRow(colour: tint.colour, selectedColour: Theme.accent,
+                           selected: selected, pinned: session.isPinned) {
+                SessionCard(session: session,
+                            worktrees: store.worktreeCoverage(for: session),
+                            selected: selected,
+                            busy: runner.state(live.id).isBusy,
+                            waiting: runner.state(live.id) == .waiting,
+                            waitIsStale: runner.waitIsStale(live.id),
+                            waitingSince: runner.waitingSince(live.id),
+                            needsInput: runner.question(live.id) != nil,
+                            finished: store.hasFinished(session.id),
+                            activity: activity(live),
+                            branch: branch(session),
+                            uncommitted: uncommitted(session),
+                            connected: mobileAccess.isConnected(session: session.id),
+                            isRenaming: renamingID == session.id,
+                            onOpen: {
+                                store.selectSession(session.id,
+                                                    destination: destination(for: session),
+                                                    revealingInSidebar: false)
+                            },
+                            onDelete: { confirmRemoveSession(session) },
+                            onRename: { name in
+                                store.renameSession(session.id, to: name)
+                                renamingID = nil
+                            },
+                            onCancelRename: { renamingID = nil })
+                    .sidebarRevealGlow(store.sidebarHighlight == session.id)
             }
-            // The rest of a filtered list is what did not match, so there is nothing to
-            // unfold.
-            let hidden = isFiltering ? 0 : sessions.count - visible.count
-            if hidden > 0 {
-                SidebarRailRow(colour: tint.colour) {
-                    SeeMoreCard(title: "See \(hidden) more…") {
-                        sessionVisibility.showAll(containerID)
+            .id(session.id)
+            .background {
+                if selected {
+                    GeometryReader { _ in
+                        Color.clear.preference(key: SidebarRenderedSessionsKey.self,
+                                               value: [session.id])
                     }
                 }
             }
+            .appContextMenu {
+                [.item(session.isPinned ? "Unpin" : "Pin",
+                       icon: session.isPinned ? "pin.slash" : "pin") {
+                     store.setPinned(!session.isPinned, forSession: session.id)
+                 },
+                 .item("Rename…") { renamingID = session.id },
+                 SessionTitle.menuEntry(for: session.id, runner: runner, store: store),
+                 .separator,
+                 .item("Delete session", kind: .destructive) {
+                     confirmRemoveSession(session)
+                 }]
+            }
+            .sidebarRailSegment(colour: tint.colour,
+                                isFirst: session.id == visible.first?.id,
+                                isLast: hidden == 0 && session.id == visible.last?.id,
+                                stackSpacing: Self.listSpacing)
+            .transition(.fadeIn)
         }
-        .transition(.fadeIn)
+        if hidden > 0 {
+            SidebarRailRow(colour: tint.colour) {
+                SeeMoreCard(title: "See \(hidden) more…") {
+                    sessionVisibility.showAll(containerID)
+                }
+            }
+            .sidebarRailSegment(colour: tint.colour, isFirst: false, isLast: true,
+                                stackSpacing: Self.listSpacing)
+            .transition(.fadeIn)
+        }
     }
 
     // Read the same way the card reads its own state, so a folded row counts exactly the
@@ -797,9 +805,10 @@ struct AppSidebar: View {
         await Task.yield()
         guard !Task.isCancelled, expansion[containerID] != false else { return }
         guard renderedSessionIDs.contains(id) else {
-            // Lazy rows report their cards after layout. Keep the request until that
-            // happens, or a scroll can stop at a parent whose card does not exist yet.
-            scroller.scrollTo(containerID)
+            // A card far down an unfolded list is not built until it is near the screen,
+            // so scrolling to its row is what builds it. The request stays until the card
+            // reports itself, and the scroll that follows settles it in place.
+            scroller.scrollTo(id)
             return
         }
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.26)) {
