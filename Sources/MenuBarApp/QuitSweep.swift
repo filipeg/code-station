@@ -35,7 +35,8 @@ struct QuitSweep {
     // `root` is the app itself outside tests. It is never signalled, nor is anything in
     // its process group as a group, since that group is the app's own.
     static func snapshot(below root: ProcessIdentity? = .current,
-                         registries: [ShellRegistry] = [.shared, .tasks]) -> QuitSweep {
+                         registries: [ShellRegistry] = [.shared, .tasks],
+                         responsible: (pid_t) -> pid_t? = responsibleProcess(of:)) -> QuitSweep {
         guard let root, let table = SessionMemoryGuard.processes() else {
             return QuitSweep(processes: [], groups: [])
         }
@@ -48,6 +49,14 @@ struct QuitSweep {
         // still names it, and the rest of its group goes with it.
         let written = Set(registries.flatMap { $0.running() }.map(\.pid))
         members += table.filter { written.contains($0.group) }
+        // Something the app started and then let go of, like a daemon, a command sent off
+        // with nohup, or a server a finished turn left running, belongs to launchd and has
+        // left the tree. macOS still counts it as the app's, and that is the link the Dock
+        // follows. XPC services count as well, but launchd ends those with the app.
+        members += table.filter { entry in
+            entry.identity != root && responsible(entry.identity.pid) == root.pid
+                && !isXPCService(entry.identity.pid)
+        }
 
         var groups = Set(members.map(\.group))
         groups.remove(ownGroup)
@@ -62,6 +71,28 @@ struct QuitSweep {
             .map(\.identity)
             .filter { seen.insert($0.pid).inserted }
         return QuitSweep(processes: processes, groups: groups)
+    }
+
+    // A private call, so it is looked up while the app runs. A system without it only loses
+    // this part of the sweep.
+    private static let responsibility: (@convention(c) (pid_t) -> pid_t)? = {
+        let everywhere = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let symbol = dlsym(everywhere, "responsibility_get_pid_responsible_for_pid") else {
+            return nil
+        }
+        return unsafeBitCast(symbol, to: (@convention(c) (pid_t) -> pid_t).self)
+    }()
+
+    static func responsibleProcess(of pid: pid_t) -> pid_t? {
+        guard let responsibility else { return nil }
+        let responsible = responsibility(pid)
+        return responsible > 0 ? responsible : nil
+    }
+
+    private static func isXPCService(_ pid: pid_t) -> Bool {
+        var buffer = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+        return String(decoding: buffer.prefix { $0 != 0 }, as: UTF8.self).contains(".xpc/")
     }
 
     // Blocks for at most the grace period and a second on top. Returns how many processes

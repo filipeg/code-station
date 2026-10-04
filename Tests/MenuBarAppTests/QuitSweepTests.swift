@@ -83,6 +83,38 @@ struct QuitSweepTests {
     @Test func aWrittenDownCommandIsSweptEvenOnceItHasLostItsParent() async throws {
         let (root, children) = try await startStandIn(stubborn: false)
         defer { end(root, children) }
+        let orphan = try startOrphan()
+        defer { kill(orphan.pid, SIGKILL) }
+        let registry = ShellRegistry(directory: ShellNotes.scratch(), owner: root)
+        registry.record(orphan)
+
+        let swept = QuitSweep.snapshot(below: root, registries: [registry])
+            .finish(grace: .milliseconds(300))
+
+        #expect(swept.killed == 1)
+        #expect(await waitUntil(timeout: .seconds(5)) { !orphan.isAlive })
+    }
+
+    // Nothing the app wrote down names it, but macOS still holds the app responsible for
+    // it, and keeps the app in the Dock for as long as it runs.
+    @Test func aProcessTheAppIsResponsibleForIsSweptOnceItHasLostItsParent() async throws {
+        let (root, children) = try await startStandIn(stubborn: false)
+        defer { end(root, children) }
+        let orphan = try startOrphan()
+        defer { kill(orphan.pid, SIGKILL) }
+
+        let swept = QuitSweep.snapshot(below: root, registries: [],
+                                       responsible: { $0 == orphan.pid ? root.pid : nil })
+            .finish(grace: .milliseconds(300))
+
+        #expect(swept.killed == 1)
+        #expect(await waitUntil(timeout: .seconds(5)) { !orphan.isAlive })
+        #expect(root.isAlive)
+    }
+
+    // A sleep in a group of its own that ignores a hangup and a terminate, whose parent has
+    // already exited.
+    private func startOrphan() throws -> ProcessIdentity {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "trap '' HUP TERM; set -m; sleep 120 >/dev/null 2>&1 & echo $!"]
@@ -92,15 +124,6 @@ struct QuitSweepTests {
         process.waitUntilExit()
         let printed = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         let orphanPID = try #require(pid_t(printed.trimmingCharacters(in: .whitespacesAndNewlines)))
-        defer { kill(orphanPID, SIGKILL) }
-        let orphan = try #require(ProcessIdentity.of(orphanPID))
-        let registry = ShellRegistry(directory: ShellNotes.scratch(), owner: root)
-        registry.record(orphan)
-
-        let swept = QuitSweep.snapshot(below: root, registries: [registry])
-            .finish(grace: .milliseconds(300))
-
-        #expect(swept.killed == 1)
-        #expect(await waitUntil(timeout: .seconds(5)) { !orphan.isAlive })
+        return try #require(ProcessIdentity.of(orphanPID))
     }
 }
