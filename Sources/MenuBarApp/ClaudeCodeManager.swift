@@ -23,6 +23,13 @@ final class ClaudeCodeManager {
     private(set) var entries: [String: Entry] = [:]
     let available: Bool
 
+    // What `claude mcp list` last said about each server it reached for. Kept between
+    // sheet openings, since a full check takes a few seconds.
+    private(set) var health: [String: AgentConfiguredServer.Health] = [:]
+    private(set) var isCheckingAll = false
+    private(set) var checkedAt: Date?
+    let serverWork = AgentServerWork()
+
     var bulkBusy: Bool { registrar.bulkBusy }
     var errors: [String: String] { registrar.errors }
 
@@ -73,6 +80,91 @@ final class ClaudeCodeManager {
                                  headers: (dict?["headers"] as? [String: String]) ?? [:])
         }
         return result
+    }
+
+    // MARK: - Servers Claude Code owns
+
+    func work(on name: String) -> AgentConfiguredServer.Work? {
+        serverWork.work[name] ?? (isCheckingAll ? .checking : nil)
+    }
+
+    // `claude mcp list` connects to every server to report on it, which is the only
+    // way to learn whether one needs a sign-in.
+    func checkHealth() {
+        guard available, !isCheckingAll else { return }
+        isCheckingAll = true
+        Task {
+            let output = try? await AgentServerWork.output("claude", ["mcp", "list"],
+                                                           timeout: .seconds(90))
+            isCheckingAll = false
+            guard let output else { return }
+            health = Self.health(inList: output)
+            checkedAt = .now
+        }
+    }
+
+    func checkHealth(of name: String) {
+        serverWork.perform(.checking, on: name) {
+            try await AgentServerWork.output("claude", ["mcp", "get", name], timeout: .seconds(60))
+        } then: { [weak self] output in
+            guard let self else { return }
+            health[name] = Self.health(inGet: output)
+            checkedAt = .now
+        }
+    }
+
+    // Claude Code opens the browser itself and waits for the sign-in to come back.
+    func signIn(_ name: String) {
+        serverWork.perform(.signingIn, on: name) {
+            try await AgentServerWork.output("claude", ["mcp", "login", name], timeout: .seconds(300))
+        } then: { [weak self] _ in
+            self?.checkHealth(of: name)
+        }
+    }
+
+    func signOut(_ name: String) {
+        serverWork.perform(.checking, on: name) {
+            try await AgentServerWork.output("claude", ["mcp", "logout", name], timeout: .seconds(30))
+        } then: { [weak self] _ in
+            self?.checkHealth(of: name)
+        }
+    }
+
+    // Lines read "name: target - ✔ Connected". The target is a URL or a command line,
+    // which can hold either separator, so the name ends at the first ": " and the
+    // status starts after the last " - ".
+    nonisolated static func health(inList output: String) -> [String: AgentConfiguredServer.Health] {
+        var result: [String: AgentConfiguredServer.Health] = [:]
+        for line in output.split(separator: "\n") {
+            guard let nameEnd = line.range(of: ": "),
+                  let statusStart = line.range(of: " - ", options: .backwards),
+                  statusStart.lowerBound > nameEnd.lowerBound,
+                  let health = health(inStatus: String(line[statusStart.upperBound...]))
+            else { continue }
+            result[String(line[..<nameEnd.lowerBound])] = health
+        }
+        return result
+    }
+
+    nonisolated static func health(inGet output: String) -> AgentConfiguredServer.Health? {
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("Status:") {
+                return health(inStatus: String(trimmed.dropFirst("Status:".count)))
+            }
+        }
+        return nil
+    }
+
+    // Matched on words rather than the marks, which differ between releases. A status
+    // the app does not know, such as a project server waiting for approval, is left
+    // unread rather than guessed at.
+    nonisolated static func health(inStatus status: String) -> AgentConfiguredServer.Health? {
+        let words = status.lowercased()
+        if words.contains("needs auth") || words.contains("authentication") { return .needsSignIn }
+        if words.contains("failed") { return .failed }
+        if words.contains("connected") { return .connected }
+        return nil
     }
 
     // Pasteable shell command shown by "Copy command" (this one is quoted for a shell).
