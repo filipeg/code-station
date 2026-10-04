@@ -27,7 +27,9 @@ final class CopilotCodeManager {
                                          notFoundMessage: "Copilot CLI not found on PATH.")
     private(set) var entries: [String: Entry] = [:]
     private(set) var isRefreshing = false
+    private(set) var checkedAt: Date?
     let available: Bool
+    let serverWork = AgentServerWork()
 
     var bulkBusy: Bool { registrar.bulkBusy }
     var errors: [String: String] { registrar.errors }
@@ -84,7 +86,31 @@ final class CopilotCodeManager {
             guard refreshID == id else { return }
             entries = listed.flatMap { Self.entries(in: Data($0.utf8)) } ?? [:]
             isRefreshing = false
+            checkedAt = .now
         }
+    }
+
+    // MARK: - Servers Copilot owns
+
+    func work(on name: String) -> AgentConfiguredServer.Work? {
+        serverWork.work[name] ?? (isRefreshing ? .checking : nil)
+    }
+
+    func setEnabled(_ enabled: Bool, for name: String, servers: [Server]) {
+        entries[name]?.enabled = enabled
+        serverWork.perform(enabled ? .turningOn : .turningOff, on: name) {
+            try await AgentServerWork.output("copilot", Self.switchArguments(enabled, for: name),
+                                             timeout: .seconds(30))
+        } then: { [weak self] _ in
+            self?.refresh(servers)
+        } otherwise: { [weak self] in
+            // The switch moved before the command, so put it back where Copilot has it.
+            self?.refresh(servers)
+        }
+    }
+
+    nonisolated static func switchArguments(_ enabled: Bool, for name: String) -> [String] {
+        ["mcp", enabled ? "enable" : "disable", name]
     }
 
     func addCommand(for server: Server) -> String? {

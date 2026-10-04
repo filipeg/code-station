@@ -12,8 +12,9 @@ struct ConfigManagerView: View {
     @State private var addingPresetGroup: SiteDefaults.MCP.PresetGroup?
     @State private var showingAddJSON = false
     @State private var grafanaExpanded = true
-    @State private var agentConfiguredExpanded = false
-    @State private var selectedAgentConfiguredName: String?
+    @State private var expandedAgents: Set<AgentConfiguredServer.Source> = []
+    // A server two agents hold has a row under each, so the pick names the agent too.
+    @State private var selectedAgentConfigured: AgentConfiguredSelection?
     @State private var filter = ""
 
     var body: some View {
@@ -48,14 +49,15 @@ struct ConfigManagerView: View {
         .sheet(isPresented: $showingAddJSON) { AddJSONServerView() }
         .onAppear { refreshIntegrations() }
         .onChange(of: filter) {
-            if !filter.isBlank { agentConfiguredExpanded = true }
+            if !filter.isBlank { expandedAgents = Set(AgentConfiguredServer.Source.allCases) }
         }
         .onChange(of: agentConfiguredServers.map(\.name)) {
-            guard let selectedAgentConfiguredName,
+            guard let selectedAgentConfigured,
                   !agentConfiguredServers.contains(where: {
-                      $0.name == selectedAgentConfiguredName
+                      $0.name == selectedAgentConfigured.name
+                          && $0.registration(from: selectedAgentConfigured.source) != nil
                   }) else { return }
-            self.selectedAgentConfiguredName = nil
+            self.selectedAgentConfigured = nil
         }
     }
 
@@ -148,15 +150,25 @@ struct ConfigManagerView: View {
                         .padding(.bottom, 2)
                     }
                     ForEach(otherServers) { row(for: $0) }
-                    if !filteredAgentConfiguredServers.isEmpty {
-                        AgentConfiguredGroupHeader(
-                            total: filteredAgentConfiguredServers.count,
-                            expanded: $agentConfiguredExpanded)
-                        if agentConfiguredExpanded || !filter.isBlank {
-                            VStack(spacing: 4) {
-                                ForEach(filteredAgentConfiguredServers) { row(for: $0) }
+                    // Grouped by agent, so who owns a server is read before its name.
+                    ForEach(AgentConfiguredServer.Source.allCases) { source in
+                        let held = filteredAgentConfiguredServers.filter {
+                            $0.registration(from: source) != nil
+                        }
+                        if !held.isEmpty {
+                            AgentConfiguredGroupHeader(
+                                source: source,
+                                total: held.count,
+                                needingLook: held.count {
+                                    $0.registration(from: source)?.status.needsLook == true
+                                },
+                                expanded: expandedBinding(source))
+                            if expandedAgents.contains(source) || !filter.isBlank {
+                                VStack(spacing: 4) {
+                                    ForEach(held) { row(for: $0, from: source) }
+                                }
+                                .transition(.fadeIn)
                             }
-                            .transition(.fadeIn)
                         }
                     }
                     if grafanaServers.isEmpty && otherServers.isEmpty
@@ -169,6 +181,7 @@ struct ConfigManagerView: View {
                     }
                 }
                 .smoothlyResizes(when: grafanaExpanded)
+                .smoothlyResizes(when: expandedAgents)
                 .padding(.horizontal, 12)
             }
 
@@ -277,7 +290,23 @@ struct ConfigManagerView: View {
             managedServers: store.servers,
             claudeEntries: claude.entries,
             codexEntries: codex.entries,
-            copilotEntries: copilot.entries)
+            copilotEntries: copilot.entries,
+            claudeHealth: claude.health,
+            work: { source, name in
+                switch source {
+                case .claudeCode: claude.work(on: name)
+                case .codex: codex.work(on: name)
+                case .copilot: copilot.work(on: name)
+                }
+            })
+    }
+
+    private func expandedBinding(_ source: AgentConfiguredServer.Source) -> Binding<Bool> {
+        Binding {
+            expandedAgents.contains(source)
+        } set: { expanded in
+            if expanded { expandedAgents.insert(source) } else { expandedAgents.remove(source) }
+        }
     }
 
     private var filteredAgentConfiguredServers: [AgentConfiguredServer] {
@@ -286,21 +315,26 @@ struct ConfigManagerView: View {
 
     private func row(for server: Server) -> some View {
         ServerRow(server: server,
-                  selected: selectedAgentConfiguredName == nil && server.id == store.selectedID,
+                  selected: selectedAgentConfigured == nil && server.id == store.selectedID,
                   running: processes.state(server.id).isActive)
             .contentShape(Rectangle())
             .onTapGesture {
-                selectedAgentConfiguredName = nil
+                selectedAgentConfigured = nil
                 store.selectedID = server.id
             }
     }
 
-    private func row(for server: AgentConfiguredServer) -> some View {
-        AgentConfiguredServerRow(
+    private func row(for server: AgentConfiguredServer,
+                     from source: AgentConfiguredServer.Source) -> some View {
+        let selection = AgentConfiguredSelection(name: server.name, source: source)
+        return AgentConfiguredServerRow(
             server: server,
-            selected: selectedAgentConfiguredName == server.id)
+            source: source,
+            selected: selectedAgentConfigured == selection)
             .contentShape(Rectangle())
-            .onTapGesture { selectedAgentConfiguredName = server.id }
+            .onTapGesture { selectedAgentConfigured = selection }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { selectedAgentConfigured = selection }
     }
 
     private func toggleAllGrafana() {
@@ -324,6 +358,7 @@ struct ConfigManagerView: View {
 
     private func refreshIntegrations() {
         claude.refresh()
+        claude.checkHealth()
         codex.refresh(store.servers)
         copilot.refresh(store.servers)
     }
@@ -331,9 +366,9 @@ struct ConfigManagerView: View {
     // MARK: - Detail
 
     @ViewBuilder private var detail: some View {
-        if let name = selectedAgentConfiguredName,
-           let server = agentConfiguredServers.first(where: { $0.name == name }) {
-            AgentConfiguredServerDetailView(server: server)
+        if let selection = selectedAgentConfigured,
+           let server = agentConfiguredServers.first(where: { $0.name == selection.name }) {
+            AgentConfiguredServerDetailView(server: server, leading: selection.source)
                 .id(server.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let server = store.selected {
@@ -348,9 +383,20 @@ struct ConfigManagerView: View {
     }
 }
 
+private struct AgentConfiguredSelection: Equatable {
+    let name: String
+    let source: AgentConfiguredServer.Source
+}
+
 private struct AgentConfiguredGroupHeader: View {
+    let source: AgentConfiguredServer.Source
     let total: Int
+    let needingLook: Int
     @Binding var expanded: Bool
+
+    private var lookPhrase: String {
+        needingLook == 1 ? "1 needs a look" : "\(needingLook) need a look"
+    }
 
     var body: some View {
         Button {
@@ -361,7 +407,10 @@ private struct AgentConfiguredGroupHeader: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
-                Text("CONFIGURED ELSEWHERE")
+                Image(systemName: source.symbol)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+                Text("FROM \(source.title.uppercased())")
                     .font(.system(size: 11, weight: .semibold))
                     .kerning(0.6)
                     .foregroundStyle(.secondary)
@@ -369,11 +418,23 @@ private struct AgentConfiguredGroupHeader: View {
                     .font(.mono(11))
                     .foregroundStyle(.secondary)
                 Spacer()
+                if needingLook > 0 {
+                    HStack(spacing: 5) {
+                        Circle().fill(Theme.attention).frame(width: 7, height: 7)
+                        Text("\(needingLook)")
+                            .font(.mono(11, .semibold))
+                            .foregroundStyle(Theme.attentionText)
+                    }
+                    .appTooltip(lookPhrase)
+                }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .hoverFill(cornerRadius: 8)
+        .accessibilityLabel("From \(source.title), \(counted(total, "server"))"
+            + (needingLook > 0 ? ", \(lookPhrase)" : ""))
+        .accessibilityValue(expanded ? "expanded" : "collapsed")
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 2)
@@ -465,38 +526,51 @@ private struct ServerRow: View {
 
 private struct AgentConfiguredServerRow: View {
     let server: AgentConfiguredServer
+    let source: AgentConfiguredServer.Source
     let selected: Bool
 
+    private var registration: AgentConfiguredServer.Registration? {
+        server.registration(from: source)
+    }
+
+    private var subtitle: String {
+        let others = server.registrations.filter { $0.source != source }.map(\.source.title)
+        let transport = registration?.transport ?? ""
+        guard !others.isEmpty else { return transport }
+        return "\(transport), also in \(others.joined(separator: " and "))"
+    }
+
     var body: some View {
+        let status = registration?.status ?? .on
         HStack(spacing: 10) {
-            Image(systemName: "link")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 8)
-            VStack(alignment: .leading, spacing: 4) {
+            AgentStatusDot(status: status)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(server.name)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                HStack(spacing: 4) {
-                    ForEach(server.registrations) { registration in
-                        Text(registration.enabled
-                             ? registration.source.shortTitle
-                             : "\(registration.source.shortTitle) off")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.black.opacity(0.05)))
-                    }
-                }
+                Text(subtitle)
+                    .font(.mono(11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 6)
+            if status.showsWordInSidebar {
+                Text(status.word)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(status.tint)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(RoundedRectangle(cornerRadius: 9)
             .fill(selected ? Color.black.opacity(0.06) : .clear))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(server.name), \(subtitle), \(status.word)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
