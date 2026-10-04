@@ -20,6 +20,7 @@ struct TaskDetailView: View {
     @State private var tab: Tab = .task
     @State private var prompt = ""
     @State private var promptLoaded = false
+    @State private var promptFocused = false
     @State private var terminalFocused = false
     @State private var askingTask: Project?
     @State private var runFilter: TaskRunHistory.Filter = .all
@@ -182,26 +183,18 @@ struct TaskDetailView: View {
     // MARK: - Task tab
 
     // The prompt is the page; the schedule and the inputs are settings beside it. Below
-    // about 900 points the side column drops under the main one rather than squeezing
-    // the prompt. One layout that changes axis keeps the editor itself in place, so the
-    // cursor survives a window being resized across the line.
-    private static let sideWidth: CGFloat = 312
+    // about 900 points the settings drop under the prompt rather than squeezing it, and
+    // stay above the runs, since they shape the next run while the runs are history. One
+    // layout that only moves its parts keeps the editor itself in place, so the cursor
+    // survives a window being resized across the line.
     private static let stackBelow: CGFloat = 900
 
     private func details(_ task: Project) -> some View {
         let runs = store.standaloneSessions(for: task.id)
         let inputs = TaskTemplate.inputs(in: spec(task))
-        let wide = paneWidth >= Self.stackBelow
-        let layout = wide
-            ? AnyLayout(HStackLayout(alignment: .top, spacing: 22))
-            : AnyLayout(VStackLayout(alignment: .leading, spacing: 22))
         return ScrollView {
-            layout {
-                VStack(alignment: .leading, spacing: 22) {
-                    promptCard(task, inputs: inputs)
-                    runList(task, runs: runs, inputs: inputs)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            TaskDetailLayout(wide: paneWidth >= Self.stackBelow) {
+                promptCard(task, inputs: inputs)
 
                 VStack(alignment: .leading, spacing: 22) {
                     TaskScheduleCard(task: task, schedule: spec(task).schedule) { schedule in
@@ -213,8 +206,9 @@ struct TaskDetailView: View {
                         }
                     }
                 }
-                .frame(width: wide ? Self.sideWidth : nil)
-                .frame(maxWidth: wide ? nil : .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                runList(task, runs: runs, inputs: inputs)
             }
             .padding(24)
         }
@@ -230,13 +224,19 @@ struct TaskDetailView: View {
 
             TaskPromptEditor(text: $prompt,
                              placeholder: "What should the agent do on every run?",
-                             minHeight: 96)
+                             minHeight: 96,
+                             onFocusChange: { promptFocused = $0 })
                 .padding(.horizontal, 18)
                 .padding(.top, 10)
 
-            holeHint(inputs)
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
+            // How to make a hole only matters while writing, but the holes a run will ask
+            // for stay in view, since they change what pressing Run does.
+            if promptFocused || !inputs.isEmpty {
+                holeHint(inputs)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+                    .transition(.opacity)
+            }
 
             Divider().overlay(Theme.hairline)
                 .padding(.top, 16)
@@ -248,6 +248,7 @@ struct TaskDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface(cornerRadius: 12)
+        .animation(Motion.reveal, value: promptFocused)
     }
 
     // What each run will ask for, read off the prompt as it is typed. With nothing to
@@ -752,6 +753,55 @@ struct TaskDetailView: View {
                                        dialogs: dialogs)
             }
             .fixedSize()
+        }
+    }
+}
+
+// Lays out the prompt, the settings and the runs, in that order. Wide, the settings sit in
+// a column on the right beside the prompt and the runs. Narrow, all three stack, with the
+// settings between the prompt and the runs.
+private struct TaskDetailLayout: Layout {
+    let wide: Bool
+    var sideWidth: CGFloat = 312
+    var spacing: CGFloat = 22
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let frames = self.frames(width: proposal.width ?? 800, subviews: subviews)
+        let size = frames.reduce(CGRect.zero) { $0.union($1) }
+        return CGSize(width: proposal.width ?? size.width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (subview, frame) in zip(subviews, frames(width: bounds.width, subviews: subviews)) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                          proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
+        guard subviews.count == 3 else { return [] }
+        let prompt = subviews[0], side = subviews[1], runs = subviews[2]
+        func height(of view: LayoutSubview, at width: CGFloat) -> CGFloat {
+            view.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        }
+
+        if wide {
+            let mainWidth = max(width - sideWidth - spacing, 0)
+            let promptHeight = height(of: prompt, at: mainWidth)
+            return [
+                CGRect(x: 0, y: 0, width: mainWidth, height: promptHeight),
+                CGRect(x: mainWidth + spacing, y: 0, width: sideWidth,
+                       height: height(of: side, at: sideWidth)),
+                CGRect(x: 0, y: promptHeight + spacing, width: mainWidth,
+                       height: height(of: runs, at: mainWidth)),
+            ]
+        }
+
+        var y: CGFloat = 0
+        return [prompt, side, runs].map { view in
+            let frame = CGRect(x: 0, y: y, width: width, height: height(of: view, at: width))
+            y = frame.maxY + spacing
+            return frame
         }
     }
 }

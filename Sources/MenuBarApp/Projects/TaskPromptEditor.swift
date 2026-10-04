@@ -13,11 +13,14 @@ struct TaskPromptEditor: View {
     let placeholder: String
     var fontSize: CGFloat = 14.5
     var minHeight: CGFloat = 120
+    var onFocusChange: (Bool) -> Void = { _ in }
 
     @State private var height: CGFloat = 0
 
     var body: some View {
-        PromptTextView(text: $text, fontSize: fontSize, onHeightChange: { height = $0 })
+        PromptTextView(text: $text, fontSize: fontSize,
+                       onHeightChange: { height = $0 },
+                       onFocusChange: onFocusChange)
             .frame(height: max(height, minHeight))
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
@@ -35,6 +38,7 @@ private struct PromptTextView: NSViewRepresentable {
     @Binding var text: String
     let fontSize: CGFloat
     let onHeightChange: (CGFloat) -> Void
+    let onFocusChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -107,6 +111,12 @@ private struct PromptTextView: NSViewRepresentable {
             // partway through laying the same view out.
             DispatchQueue.main.async { report(height) }
         }
+
+        func reportFocus(_ focused: Bool) {
+            let report = parent.onFocusChange
+            // AppKit can move the first responder while SwiftUI is updating the view.
+            DispatchQueue.main.async { report(focused) }
+        }
     }
 
     final class HoleTextView: NSTextView {
@@ -131,6 +141,18 @@ private struct PromptTextView: NSViewRepresentable {
                      .backgroundColor: Theme.accentNSColor.withAlphaComponent(0.11)],
                     forCharacterRange: range)
             }
+        }
+
+        override func becomeFirstResponder() -> Bool {
+            let accepted = super.becomeFirstResponder()
+            if accepted { coordinator?.reportFocus(true) }
+            return accepted
+        }
+
+        override func resignFirstResponder() -> Bool {
+            let accepted = super.resignFirstResponder()
+            if accepted { coordinator?.reportFocus(false) }
+            return accepted
         }
 
         override func didChangeText() {
