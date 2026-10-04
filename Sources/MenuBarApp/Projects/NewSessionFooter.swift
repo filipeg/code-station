@@ -18,7 +18,6 @@ struct NewSessionFooter: View {
     // The sheet's own condition on top of the shared ones, such as having enough
     // projects.
     var ready = true
-    var workspaceSummary: String? = nil
     // Leaving the agent unset is deliberate: the app-wide choice remains the default
     // until this one launch says otherwise, so cancelling the sheet cannot change it.
     @Binding var selectedAgent: AgentKind?
@@ -39,100 +38,29 @@ struct NewSessionFooter: View {
     var body: some View {
         VStack(spacing: 0) {
             Divider().overlay(Theme.hairline)
-            if let workspaceSummary {
-                workspaceContent(summary: workspaceSummary)
-            } else {
-                HStack(alignment: .top, spacing: 10) {
-                    if waitingOn != nil {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text(waitingOn ?? note)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 12)
-                    ActionButton(title: "Cancel", size: 13, keyboardShortcut: .cancelAction,
-                                 action: dismiss)
-                    SessionBotPicker(avatars: appSettings.agentAvatars,
-                                     selectedName: $selectedAvatarName,
-                                     sessionID: sessionID)
-                    createButton
+            HStack(alignment: .top, spacing: 10) {
+                if waitingOn != nil {
+                    ProgressView().controlSize(.small)
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                .background(Theme.card)
+                Text(waitingOn ?? note)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                ActionButton(title: "Cancel", size: 13, keyboardShortcut: .cancelAction,
+                             action: dismiss)
+                SessionBotPicker(avatars: appSettings.agentAvatars,
+                                 selectedName: $selectedAvatarName,
+                                 sessionID: sessionID)
+                createButton
             }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(Theme.card)
         }
         .task {
             try? await Task.sleep(for: Self.longestWait)
             withAnimation(.easeOut(duration: 0.2)) { gaveUpWaiting = true }
         }
-    }
-
-    private func workspaceContent(summary: String) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 10) {
-                Image(systemName: chosenAgent?.symbol ?? "terminal")
-                    .font(.system(size: 18))
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: 32, height: 32)
-                    .background(Theme.field, in: RoundedRectangle(cornerRadius: 8))
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Agent").font(.system(size: 11)).foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
-                        Text(chosenAgent?.title ?? "No coding agent found on PATH.")
-                            .font(.system(size: 13, weight: .semibold))
-                        if runner.availableAgents.count > 1 { MenuChevron() }
-                    }
-                    .padding(.vertical, 3)
-                    .contentShape(Rectangle())
-                    .appMenu(edge: .top, keyboardNavigation: true) { agentMenu }
-                    .disabled(runner.availableAgents.count < 2)
-                    .accessibilityLabel("Choose coding agent")
-                    .accessibilityValue(chosenAgent?.title ?? "Unavailable")
-                }
-                if selectedAgent == nil, chosenAgent != nil {
-                    Text("Default agent").font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(summary).font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 16) {
-                    workspaceNote.fixedSize()
-                    Spacer(minLength: 10)
-                    workspaceActions
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    workspaceNote
-                    HStack { Spacer(); workspaceActions }
-                }
-            }
-        }
-        .padding(.horizontal, 32)
-        .padding(.vertical, 20)
-        .background(Theme.card)
-    }
-
-    private var workspaceNote: some View {
-        HStack(spacing: 8) {
-            if waitingOn != nil { ProgressView().controlSize(.small) }
-            Text(waitingOn ?? note)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var workspaceActions: some View {
-        HStack(spacing: 10) {
-            ActionButton(title: "Cancel", tone: .outlined, size: 13,
-                         keyboardShortcut: .cancelAction, action: dismiss)
-            ActionButton(title: "Create session", tone: .green, size: 13,
-                         keyboardShortcut: .defaultAction, action: create)
-                .disabled(!canCreate)
-        }
-        .fixedSize()
     }
 
     private var createButton: some View {

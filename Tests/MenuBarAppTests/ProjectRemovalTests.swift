@@ -55,7 +55,10 @@ struct ProjectRemovalTests {
         let dialog = ProjectRemoval.confirmation(for: task, in: store) {}
 
         #expect(dialog.title == "Delete Sweep?")
-        #expect(dialog.message?.contains("deletes the task's folder") == true)
+        #expect(dialog.impact?.subject?.kind == .task)
+        #expect(dialog.impact?.rows.last?.title == "Task folder")
+        #expect(dialog.impact?.rows.last?.kept == false)
+        #expect(dialog.impact?.warning != nil)
         #expect(dialog.actions.first?.label == "Delete task")
     }
 
@@ -65,15 +68,15 @@ struct ProjectRemovalTests {
         let task = try store.addTask(named: "Sweep", prompt: "Do the thing.",
                                      in: scratch.path("tasks")).get()
         #expect(ProjectRemoval.confirmation(for: task, in: store) {}
-            .message?.contains("This drops its 0 runs") == true)
+            .impact?.rows.first?.title == "0 runs")
 
         _ = store.newSession(in: task.id)
         #expect(ProjectRemoval.confirmation(for: task, in: store) {}
-            .message?.contains("This drops its 1 run and") == true)
+            .impact?.rows.first?.title == "1 run")
 
         _ = store.newSession(in: task.id)
         #expect(ProjectRemoval.confirmation(for: task, in: store) {}
-            .message?.contains("This drops its 2 runs and") == true)
+            .impact?.rows.first?.title == "2 runs")
     }
 
     // A count that reads "1 sessions" is the kind of thing that survives a rewrite in one

@@ -775,11 +775,15 @@ struct ExplorerView: View {
 
     private func confirmTrash(_ node: FileNode) {
         let losesEdits = dirty && selected.map { contains(node, $0.path) } == true
-        let message = losesEdits
-            ? "Unsaved edits to \(selected?.name ?? "the open file") will be lost."
-            : "You can put it back from the Trash in Finder."
-        dialogs.show(.confirm("Move \(node.name) to the Trash?", message: message,
-                              action: "Move to Trash") { trash(node) })
+        var rows: [Dialog.Impact.Row] = []
+        if losesEdits {
+            rows.append(.init(title: "Unsaved edits",
+                              detail: "Edits to \(selected?.name ?? "the open file") are lost."))
+        }
+        rows.append(.init(title: node.isDirectory ? "Folder can be restored" : "File can be restored",
+                          detail: "Put it back from the Trash in Finder.", kept: true))
+        dialogs.show(.impact("Move \(node.name) to the Trash?", rows: rows,
+                             action: "Move to Trash") { trash(node) })
     }
 
     private func trash(_ node: FileNode) {
