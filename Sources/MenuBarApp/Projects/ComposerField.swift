@@ -163,8 +163,19 @@ struct TextArea: NSViewRepresentable {
 
         // Only ever claim focus, never clear it: handing it back to nobody would leave the
         // window with no first responder at all. Whatever the user moves to next takes it.
-        if isFocused, isEnabled, textView.window?.firstResponder !== textView {
-            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+        // The claim is made once each time focus is asked for, not on every update. Two
+        // fields bound to the same flag would otherwise take it from each other forever,
+        // and every switch makes macOS build a new caret indicator, which piles up fast
+        // enough to stall the whole machine.
+        if isFocused, isEnabled {
+            if !context.coordinator.claimedFocus, let window = textView.window {
+                context.coordinator.claimedFocus = true
+                if window.firstResponder !== textView {
+                    DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+                }
+            }
+        } else {
+            context.coordinator.claimedFocus = false
         }
 
         textView.highlightsKeyword = highlightsKeyword
@@ -179,6 +190,7 @@ struct TextArea: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: TextArea
         private var lastHeight: CGFloat = -1
+        var claimedFocus = false
 
         init(_ parent: TextArea) { self.parent = parent }
 

@@ -524,13 +524,16 @@ struct DesignView: View {
                     ? DesignWebView.toolbarHeight : 0
                 let workspace = CGSize(width: geometry.size.width,
                                        height: max(0, geometry.size.height - toolbarHeight))
-                canvasContent(session, directory: directory, busy: busy)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .overlay(alignment: .bottom) {
-                        floatingConversation(session, size: workspace)
-                            .padding(DesignConversationLayout.inset(in: workspace))
-                            .padding(.bottom, toolbarHeight)
-                    }
+                // A sibling rather than an overlay of the canvas: an overlay is rebuilt each
+                // time the canvas switches between its placeholders and the page, which would
+                // throw away the composer, its focus and the transcript's scroll position.
+                ZStack(alignment: .bottom) {
+                    canvasContent(session, directory: directory, busy: busy)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    floatingConversation(session, size: workspace)
+                        .padding(DesignConversationLayout.inset(in: workspace))
+                        .padding(.bottom, toolbarHeight)
+                }
             }
         }
     }

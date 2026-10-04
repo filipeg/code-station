@@ -247,4 +247,62 @@ struct DesignConversationViewTests {
             #expect(panel.minY >= canvas.minY && panel.maxY <= canvas.maxY)
         }
     }
+
+    // Starting a turn swaps the empty canvas for a "Building" one. The panel over it has to
+    // stay the same views, or the composer is built twice and both copies fight over focus.
+    @Test func startingATurnKeepsTheConversationPanel() async throws {
+        let (store, scratch) = TestStore.make()
+        let project = try TestStore.project(in: store)
+        let session = store.newSession(in: project.id, seed: .init(agent: .codex, mode: .design))
+        let agent = scratch.path("slow-agent")
+        try "#!/bin/sh\nsleep 5\n".write(to: agent, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agent.path)
+        let runner = SessionRunner(paths: [.codex: agent.path])
+        let preferences = try #require(UserDefaults(suiteName: "design-turn-\(UUID().uuidString)"))
+        let hosting = NSHostingController(rootView:
+            DesignView(sessionID: session.id)
+                .environment(store)
+                .environment(runner)
+                .environment(AppSettings(agentAvatarURL: scratch.path("avatar.png"), preferences: preferences))
+                .environment(ShortcutStore(storageURL: scratch.path("shortcuts.json"), siteDefaults: SiteDefaults()))
+                .environment(GlobalCommandPaletteController())
+                .background(Theme.background)
+                .appOverlays())
+        hosting.sizingOptions = []
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 800),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentViewController = hosting
+        window.setContentSize(NSSize(width: 1000, height: 800))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentViewController = nil
+            runner.stopAll()
+        }
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews + view.subviews.flatMap(descendants)
+        }
+        func composers() -> [NSTextView] {
+            descendants(hosting.view).compactMap { $0 as? NSTextView }.filter(\.isEditable)
+        }
+        func settle() async throws {
+            for _ in 0..<20 {
+                try await Task.sleep(for: .milliseconds(20))
+                hosting.view.layoutSubtreeIfNeeded()
+            }
+        }
+        try await settle()
+        let composer = try #require(composers().first)
+        let panel = try #require(descendants(hosting.view).compactMap {
+            $0 as? DesignConversationDismissal.ObserverView
+        }.first)
+
+        runner.send("Improve this screen", sessionID: session.id, store: store)
+        try await settle()
+
+        #expect(runner.state(session.id).isBusy)
+        #expect(composers().map(ObjectIdentifier.init) == [ObjectIdentifier(composer)])
+        #expect(descendants(hosting.view).contains { $0 === panel })
+    }
 }
