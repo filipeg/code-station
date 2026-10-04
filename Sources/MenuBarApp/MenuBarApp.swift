@@ -71,7 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // needs somewhere to show that the run it belonged to ended here.
         SessionLog.note("app launched")
         SessionLog.startMemoryMonitoring()
-        closeShellsLeftBehind()
+        RunRegistry.shared.record(RunRegistry.launchCoalition())
+        clearUpAfterEarlierRuns()
         // A deleted project or session leaves no way back to its terminals, so they are
         // closed with it rather than kept alive by a store nothing can reach. Its open
         // shortcut output goes for the same reason.
@@ -105,15 +106,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // terminal - therefore strands every shell it had open, and nothing else will ever
     // close them. This launch is the first moment anything can. It waits on shells that
     // are slow to hang up, so it stays off the main actor.
-    private func closeShellsLeftBehind() {
+    //
+    // The same goes for anything else such a run started, like a daemon a command sent
+    // off on its own. The shells and commands go first, since those have notes of their
+    // own and are closed the way they expect.
+    private func clearUpAfterEarlierRuns() {
         Task.detached(priority: .utility) {
             let closed = await ShellRegistry.shared.reapOrphans()
             if !closed.isEmpty {
                 SessionLog.note("closed \(counted(closed.count, "shell")) left behind by an earlier run")
             }
             let stopped = await ShellRegistry.tasks.reapOrphans()
-            guard !stopped.isEmpty else { return }
-            SessionLog.note("stopped \(counted(stopped.count, "command")) left behind by an earlier run")
+            if !stopped.isEmpty {
+                SessionLog.note("stopped \(counted(stopped.count, "command")) left behind by an earlier run")
+            }
+            let ended = RunRegistry.shared.reapEarlierRuns()
+            guard ended > 0 else { return }
+            SessionLog.note("stopped \(counted(ended, "process", plural: "processes")) left behind by an earlier run")
         }
     }
 

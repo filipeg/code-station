@@ -73,6 +73,26 @@ struct QuitSweep {
         return QuitSweep(processes: processes, groups: groups)
     }
 
+    // Everything still running in the coalitions of app runs that are over. Those runs
+    // stopped nothing on their way out, or not enough, and nobody else is left to.
+    static func leftovers(in coalitions: Set<UInt64>, coalition: (pid_t) -> UInt64?) -> QuitSweep {
+        guard !coalitions.isEmpty, let table = SessionMemoryGuard.processes() else {
+            return QuitSweep(processes: [], groups: [])
+        }
+        let members = table.filter { entry in
+            let pid = entry.identity.pid
+            guard pid != getpid(), let home = coalition(pid) else { return false }
+            return coalitions.contains(home) && !isXPCService(pid)
+        }
+        var groups = Set(members.map(\.group))
+        groups.remove(getpgrp())
+        groups.remove(0)
+        groups.remove(1)
+        return QuitSweep(processes: members.map(\.identity), groups: groups)
+    }
+
+    var count: Int { processes.count }
+
     // A private call, so it is looked up while the app runs. A system without it only loses
     // this part of the sweep.
     private static let responsibility: (@convention(c) (pid_t) -> pid_t)? = {
