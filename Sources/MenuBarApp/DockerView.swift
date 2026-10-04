@@ -97,8 +97,11 @@ struct DockerView: View {
                 LazyVStack(spacing: 6) {
                     ForEach(docker.images.items) { image in
                         ImageRow(image: image, deleting: docker.images.busy.contains(image.id)) {
-                            confirmDelete(kind: "image", name: image.reference,
-                                          message: "Docker will remove this image. An image used by a container cannot be deleted.") {
+                            confirmDelete(kind: "image", name: image.reference, rows: [
+                                .init(title: "Image", detail: "Removed from this Mac. It can be pulled or built again."),
+                                .init(title: "Containers stay",
+                                      detail: "An image used by a container cannot be deleted.", kept: true)
+                            ]) {
                                 await docker.delete(image)
                             }
                         }
@@ -112,8 +115,11 @@ struct DockerView: View {
                 LazyVStack(spacing: 6) {
                     ForEach(docker.networks.items) { network in
                         NetworkRow(network: network, deleting: docker.networks.busy.contains(network.id)) {
-                            confirmDelete(kind: "network", name: network.name,
-                                          message: "Docker will remove this network. A network connected to a container cannot be deleted.") {
+                            confirmDelete(kind: "network", name: network.name, rows: [
+                                .init(title: "Network", detail: "Removed by Docker."),
+                                .init(title: "Containers stay",
+                                      detail: "A network connected to a container cannot be deleted.", kept: true)
+                            ]) {
                                 await docker.delete(network)
                             }
                         }
@@ -127,8 +133,11 @@ struct DockerView: View {
                 LazyVStack(spacing: 6) {
                     ForEach(docker.volumes.items) { volume in
                         VolumeRow(volume: volume, deleting: docker.volumes.busy.contains(volume.id)) {
-                            confirmDelete(kind: "volume", name: volume.id,
-                                          message: "All data in this volume will be lost. A volume used by a container cannot be deleted.") {
+                            confirmDelete(kind: "volume", name: volume.id, rows: [
+                                .init(title: "Volume and all its data", detail: "Permanently removed by Docker."),
+                                .init(title: "Containers stay",
+                                      detail: "A volume used by a container cannot be deleted.", kept: true)
+                            ], warning: "Volume data cannot be restored.") {
                                 await docker.delete(volume)
                             }
                         }
@@ -206,9 +215,10 @@ struct DockerView: View {
 
     // Docker's own complaint is shown once the question is answered, so a failed
     // removal says why rather than quietly leaving the row where it was.
-    private func confirmDelete(kind: String, name: String, message: String,
-                               action: @escaping () async -> String?) {
-        dialogs.show(.confirm("Delete \"\(name)\"?", message: message, action: "Delete \(kind)") {
+    private func confirmDelete(kind: String, name: String, rows: [Dialog.Impact.Row],
+                               warning: String? = nil, action: @escaping () async -> String?) {
+        dialogs.show(.impact("Delete \"\(name)\"?", rows: rows, warning: warning,
+                             action: "Delete \(kind)") {
             Task {
                 if let failure = await action() {
                     dialogs.show(.notice("Could not delete \(kind)", message: failure))

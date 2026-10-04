@@ -19,16 +19,26 @@ struct Dialog: Identifiable {
         var isEnabled: () -> Bool = { true }
     }
 
+    // What a deletion takes away and what it leaves behind, one row each, so nothing about
+    // it is buried in a paragraph the reader skims past.
     struct Impact {
+        struct Subject {
+            enum Kind { case project, task, workspace }
+
+            let name: String
+            var kind: Kind = .project
+        }
+
         struct Row {
             let title: String
             let detail: String
             var kept = false
         }
 
-        let projectName: String
+        // The project, task or workspace the deletion happens in, drawn as its tile.
+        var subject: Subject?
         let rows: [Row]
-        let warning: String?
+        var warning: String?
     }
 
     let id = UUID()
@@ -60,6 +70,17 @@ extension Dialog {
             Action(label: action, kind: kind, handler: handler),
             Action(label: cancel, kind: .cancel)
         ])
+    }
+
+    // A confirmation for a deletion with more than one consequence. The rows make the
+    // dialog wider than a plain question, so the details do not wrap into a column.
+    static func impact(_ title: String, message: String? = nil, subject: Impact.Subject? = nil,
+                       rows: [Impact.Row], warning: String? = nil, action: String,
+                       handler: @escaping () -> Void) -> Dialog {
+        var dialog = confirm(title, message: message, action: action, handler: handler)
+        dialog.width = 500
+        dialog.impact = Impact(subject: subject, rows: rows, warning: warning)
+        return dialog
     }
 }
 
@@ -203,13 +224,20 @@ private struct ImpactDialogCard: View {
             MenuContentScrollView(maxHeight: max(0, maxHeight - 76)) {
                 VStack(alignment: .leading, spacing: 20) {
                     if let impact = dialog.impact {
-                        HStack(spacing: 10) {
-                            ProjectTileView(name: impact.projectName,
-                                            tint: Theme.projectTint(for: impact.projectName), side: 29)
-                                .accessibilityHidden(true)
-                            Text(impact.projectName)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
+                        if let subject = impact.subject {
+                            HStack(spacing: 10) {
+                                ProjectTileView(name: subject.name,
+                                                tint: subject.kind == .workspace
+                                                    ? Theme.workspaceTint
+                                                    : Theme.projectTint(for: subject.name),
+                                                side: 29,
+                                                dashed: subject.kind == .task,
+                                                stacked: subject.kind == .workspace)
+                                    .accessibilityHidden(true)
+                                Text(subject.name)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         VStack(alignment: .leading, spacing: 10) {
                             Text(dialog.title)

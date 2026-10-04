@@ -869,33 +869,43 @@ struct AppSidebar: View {
     }
 
     // Clearing a project keeps whatever is still running and takes the rest, worktrees
-    // included. The message counts the worktrees separately: they are the part of this
-    // that touches disk, and the part that can take uncommitted work with it.
+    // included. The worktrees get their own row: they are the part of this that touches
+    // disk, and the part that can take uncommitted work with it.
     private func confirmClearSessions(in project: Project) {
         let idle = idleSessions(in: project)
         guard !idle.isEmpty else { return }
-        let worktreePaths = idle.map { store.checkoutProjects(for: $0).compactMap(\.worktreePath) }
-        let worktrees = worktreePaths.count { !$0.isEmpty }
-        let dirty = worktreePaths.count { $0.contains(where: workingTrees.isDirty) }
+        let worktrees = idle.flatMap { store.checkoutProjects(for: $0).compactMap(\.worktreePath) }
+        let dirty = worktrees.count(where: workingTrees.isDirty)
         let designs = idle.count { store.hasDesignArtifacts(for: $0) }
         let kept = store.standaloneSessions(for: project.id).count - idle.count
-        var message = "Their conversation history is removed from the app."
+
+        var rows = [Dialog.Impact.Row(title: counted(idle.count, "session"),
+                                      detail: "Conversation history is removed from Code Station.")]
+        if !worktrees.isEmpty {
+            rows.append(.init(
+                title: counted(worktrees.count, "worktree"),
+                detail: "Removed from disk."
+                    + (dirty > 0
+                       ? " \(dirty) \(dirty == 1 ? "has" : "have") uncommitted changes that will be lost."
+                       : " Branches are kept if they have unmerged commits.")))
+        }
         if designs > 0 {
-            message += designs == 1
-                ? " One session contains generated Design files that are permanently removed."
-                : " \(designs) sessions contain generated Design files that are permanently removed."
-        }
-        if worktrees > 0 {
-            message += " \(worktrees) of them ran in a worktree. Uncommitted changes there are lost, and branches are kept only where they have unmerged commits."
-        }
-        if dirty > 0 {
-            message += " \(dirty) of those worktree\(dirty == 1 ? " has" : "s have") uncommitted changes right now."
+            rows.append(.init(title: "Generated Design files",
+                              detail: "Permanently removed from \(counted(designs, "session"))."))
         }
         if kept > 0 {
-            message += " The \(kept) still running stay\(kept == 1 ? "s" : "")."
+            rows.append(.init(title: "\(counted(kept, "running session")) \(kept == 1 ? "stays" : "stay")",
+                              detail: "Sessions that are still working are left alone.", kept: true))
         }
-        dialogs.show(.confirm("Clear \(counted(idle.count, "session")) from \(project.name)?",
-                              message: message, action: "Clear sessions") {
+        rows.append(.init(title: "Original project folder stays", detail: project.collapsedPath, kept: true))
+
+        dialogs.show(.impact("Clear \(counted(idle.count, "session")) from \(project.name)?",
+                             message: "Sessions that are not running will leave Code Station.",
+                             subject: .init(name: project.name), rows: rows,
+                             warning: dirty > 0
+                                 ? "Uncommitted changes and conversation history cannot be restored."
+                                 : "Conversation history cannot be restored.",
+                             action: "Clear sessions") {
             Task {
                 if case .failure(let failure) = await SessionRemoval.run(
                     idle, in: store, runner: runner) {

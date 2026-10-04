@@ -350,9 +350,11 @@ struct DispatchView: View {
 @MainActor
 private func deleteDialog(for request: SavedRequest, store: DispatchStore,
                           auth: DispatchAuthStore) -> Dialog {
-    Dialog.confirm("Delete \"\(request.name.isEmpty ? "Untitled" : request.name)\"?",
-                   message: "The request and everything set up on it are gone for good.",
-                   action: "Delete request") {
+    Dialog.impact("Delete \"\(request.name.isEmpty ? "Untitled" : request.name)\"?",
+                  rows: [.init(title: "Request",
+                               detail: "The URL, headers, body and auth set up on it are deleted.")],
+                  warning: "The request cannot be restored.",
+                  action: "Delete request") {
         store.remove(request.id)
         auth.forgetBasicPassword(for: request.id)
     }
@@ -361,11 +363,12 @@ private func deleteDialog(for request: SavedRequest, store: DispatchStore,
 @MainActor
 private func deleteFolderDialog(for folder: RequestFolder, store: DispatchStore) -> Dialog {
     let count = store.requestCount(in: folder.id)
-    return Dialog.confirm("Delete \"\(folder.name)\"?",
-                          message: count == 0
-                              ? "This empty folder is gone for good."
-                              : "The folder is gone. Its \(counted(count, "request")) move to Default.",
-                          action: "Delete folder") {
+    var rows = [Dialog.Impact.Row(title: count == 0 ? "Empty folder" : "Folder", detail: "Deleted for good.")]
+    if count > 0 {
+        rows.append(.init(title: "\(counted(count, "request")) \(count == 1 ? "stays" : "stay")",
+                          detail: "Moved to Default.", kept: true))
+    }
+    return Dialog.impact("Delete \"\(folder.name)\"?", rows: rows, action: "Delete folder") {
         store.removeFolder(folder.id)
     }
 }

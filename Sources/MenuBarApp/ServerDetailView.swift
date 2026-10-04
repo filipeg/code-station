@@ -389,9 +389,10 @@ struct ServerDetailView: View {
     // MARK: - Footer
 
     private func confirmDelete(_ server: Server) {
-        dialogs.show(.confirm("Delete \(server.name)?",
-                              message: "This removes the server from the config file.",
-                              action: "Delete server") { store.remove(serverID) })
+        dialogs.show(.impact("Delete \(server.name)?",
+                             rows: [.init(title: "Server entry",
+                                          detail: "Removed from \(store.configURL.path.abbreviatedPath).")],
+                             action: "Delete server") { store.remove(serverID) })
     }
 
     private func footer(_ server: Server) -> some View {
