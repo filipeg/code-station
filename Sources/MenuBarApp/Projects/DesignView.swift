@@ -40,7 +40,15 @@ struct DesignView: View {
                 store.hold(sessionID, for: .open)
                 AppNotifier.shared.clear(
                     sessionID: store.userFacingSessionID(for: sessionID))
-                composerFocused = true
+                // A design that already exists is what the user came back to look at,
+                // so the panel starts as a small tab instead of covering it.
+                if DesignArtifactRevision.read(directory) != nil {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { conversationMinimized = true }
+                } else {
+                    composerFocused = true
+                }
             }
             .onDisappear {
                 store.release(sessionID, for: .open)
