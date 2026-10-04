@@ -296,6 +296,13 @@ struct DesignView: View {
                     proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
                 }
             }
+            // A new prompt always goes to the end, even when the user had scrolled back
+            // or the composer growing while they typed pushed the end out of view. The
+            // scroll waits a turn so the new message is laid out before it runs.
+            .onChange(of: latestPromptID) {
+                transcriptAtBottom = true
+                Task { proxy.scrollTo("design-transcript-bottom", anchor: .bottom) }
+            }
         }
     }
 
