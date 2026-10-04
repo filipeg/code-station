@@ -24,8 +24,9 @@ struct NewWorkspaceSessionView: View {
     // say, then the same read again after a fetch, so the cards are honest immediately
     // and accurate a moment later.
     @State private var freshness: [UUID: GitFreshness.Report] = [:]
-    // One explicit start point per stale repository. Missing entries mean the checkout
-    // as it is, which is also the choice for repositories with nothing to reconcile.
+    // One start point per stale repository, the recommended one until the user picks
+    // another. Missing entries mean the checkout as it is, which is also the choice for
+    // repositories with nothing to reconcile.
     @State private var startPoints: [UUID: SessionStartPoint] = [:]
     @State private var chosenStartPoints: Set<UUID> = []
     // Fetch passes still running, which hold the footer's button.
@@ -123,10 +124,7 @@ struct NewWorkspaceSessionView: View {
             await GitFreshness.checkAll(repositories, fetch: fetch) { id, report in
                 withAnimation(.easeOut(duration: 0.2)) {
                     freshness[id] = report
-                    if fetch, report.defaultBranchHasDiverged,
-                       worktrees.contains(id), !chosenStartPoints.contains(id) {
-                        startPoints[id] = .remote
-                    }
+                    selectRecommendedStartPoint(for: id)
                 }
             }
         }
@@ -140,19 +138,22 @@ struct NewWorkspaceSessionView: View {
             report: freshness[project.id], startPoint: startPoint(project.id),
             selectWorktree: {
                 worktrees.insert(project.id)
-                if let report = freshness[project.id], report.defaultBranchHasDiverged,
-                   !chosenStartPoints.contains(project.id) {
-                    startPoints[project.id] = .remote
-                }
+                selectRecommendedStartPoint(for: project.id)
             },
             selectProjectFolder: {
                 worktrees.remove(project.id)
+                selectRecommendedStartPoint(for: project.id)
                 if startPoints[project.id] == .remote {
                     startPoints[project.id] = .currentCheckout
                 }
             },
             onChoose: { chosenStartPoints.insert(project.id) },
             detach: lead ? nil : { detach(project.id) })
+    }
+
+    private func selectRecommendedStartPoint(for id: UUID) {
+        guard let report = freshness[id], !chosenStartPoints.contains(id) else { return }
+        startPoints[id] = .recommended(for: report, worktree: worktrees.contains(id))
     }
 
     private func startPoint(_ id: UUID) -> Binding<SessionStartPoint> {

@@ -93,7 +93,10 @@ struct NewSessionView: View {
         .task {
             guard project.isGitRepository else { return }
             let local = await GitFreshness.check(at: project.path, fetch: false)
-            withAnimation(.easeOut(duration: 0.2)) { freshness = local }
+            withAnimation(.easeOut(duration: 0.2)) {
+                freshness = local
+                if let local { selectRecommendedStartPoint(for: local) }
+            }
             let fetched = await GitFreshness.check(at: project.path, fetch: true)
             withAnimation(.easeOut(duration: 0.2)) {
                 if let fetched {
@@ -138,12 +141,13 @@ struct NewSessionView: View {
 
     private func selectProjectFolder() {
         useWorktree = false
+        if let freshness { selectRecommendedStartPoint(for: freshness) }
         if startPoint == .remote { startPoint = .currentCheckout }
     }
 
     private func selectRecommendedStartPoint(for report: GitFreshness.Report) {
-        guard useWorktree, report.defaultBranchHasDiverged, !startPointWasChosen else { return }
-        startPoint = .remote
+        guard !startPointWasChosen else { return }
+        startPoint = .recommended(for: report, worktree: useWorktree)
     }
 
     // The update the user asked for runs here, while the sheet is still up: it can take a
@@ -189,6 +193,16 @@ enum SessionStartPoint: Equatable {
     case currentCheckout
     case remote
     case updateCheckout
+
+    // A session should start from the default branch at its latest revision, and the
+    // project folder should end up there too, so updating the checkout comes first. A
+    // dirty folder cannot be updated safely, so a worktree forks from the remote tip
+    // instead and leaves the folder alone.
+    static func recommended(for report: GitFreshness.Report, worktree: Bool) -> SessionStartPoint {
+        if report.canUpdateCheckout { return .updateCheckout }
+        if worktree, report.isStale, report.remoteRef != nil { return .remote }
+        return .currentCheckout
+    }
 }
 
 // What the sheet came back with. The worktree case carries the id the session must be
@@ -254,7 +268,7 @@ struct FreshnessNotice: View {
                 if expanded {
                     if forWorktree, let remote = report.remoteRef {
                         choice(.remote,
-                               title: "Start from \(remote)\(report.defaultBranchHasDiverged ? " (Recommended)" : "")",
+                               title: "Start from \(remote)",
                                detail: remoteDetail)
                     }
                     if report.canUpdateCheckout, let title = updateTitle {

@@ -160,6 +160,33 @@ struct GitFreshnessTests {
                 == "The checkout is main at its latest revision. Origin could not be reached, so this may be out of date.")
     }
 
+    // New sessions start from the default branch at its latest revision and bring the
+    // project folder along, unless uncommitted work makes the update unsafe.
+    @Test func recommendsUpdatingTheCheckoutFirst() {
+        let behind = GitFreshness.Report(currentBranch: "main", defaultBranch: "main",
+                                         remoteRef: "origin/main", behind: 2)
+        #expect(SessionStartPoint.recommended(for: behind, worktree: true) == .updateCheckout)
+        #expect(SessionStartPoint.recommended(for: behind, worktree: false) == .updateCheckout)
+
+        let diverged = GitFreshness.Report(currentBranch: "main", defaultBranch: "main",
+                                           remoteRef: "origin/main", behind: 2,
+                                           defaultBranchAhead: 1, defaultBranchBehind: 2)
+        #expect(SessionStartPoint.recommended(for: diverged, worktree: true) == .updateCheckout)
+
+        let elsewhere = GitFreshness.Report(currentBranch: "feature", defaultBranch: "main",
+                                            remoteRef: "origin/main")
+        #expect(SessionStartPoint.recommended(for: elsewhere, worktree: true) == .updateCheckout)
+
+        let dirty = GitFreshness.Report(currentBranch: "main", defaultBranch: "main",
+                                        remoteRef: "origin/main", behind: 2, dirty: true)
+        #expect(SessionStartPoint.recommended(for: dirty, worktree: true) == .remote)
+        #expect(SessionStartPoint.recommended(for: dirty, worktree: false) == .currentCheckout)
+
+        let fine = GitFreshness.Report(currentBranch: "main", defaultBranch: "main",
+                                       remoteRef: "origin/main")
+        #expect(SessionStartPoint.recommended(for: fine, worktree: true) == .currentCheckout)
+    }
+
     // MARK: - Fixtures
 
     // An origin and a clone of it, so fetches and behind-counts work without a network.
