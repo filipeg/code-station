@@ -69,6 +69,22 @@ extension ChangesReviewTests {
         #expect(snapshot.syncDescription() == "2 ahead · 3 behind origin/main")
     }
 
+    @Test func remoteActionsFollowWhatTheBranchNeeds() {
+        var snapshot = GitSnapshot(state: .ready)
+        #expect(snapshot.remoteActions == [.publish])
+        snapshot.hasCommits = false
+        #expect(snapshot.remoteActions.isEmpty)
+        snapshot.hasCommits = true
+        snapshot.upstream = "origin/main"
+        #expect(snapshot.remoteActions.isEmpty)
+        snapshot.ahead = 2
+        #expect(snapshot.remoteActions == [.push(2)])
+        snapshot.behind = 3
+        #expect(snapshot.remoteActions == [.pull(3), .push(2)])
+        snapshot.ahead = 0
+        #expect(snapshot.remoteActions == [.pull(3)])
+    }
+
     @Test func renamedVersionsKeepWhitespaceAndMissingFinalNewline() async throws {
         let repo = try GitRepo()
         try repo.write("old.txt", "\tkeep whitespace\nlast line")

@@ -259,79 +259,27 @@ struct ChangesView: View {
 
     // MARK: - Header
 
+    // The header is always one row. A narrow pane gives things up in a fixed order instead
+    // of wrapping, so Commit never lands on a line of its own.
     private var header: some View {
-        ChangesHeaderLayout {
+        Group {
             if let snapshot, snapshot.state == .ready {
-                HeaderTabToggle(selection: $mode,
-                                options: [("Changes", .changes), ("History", .history)])
-                branchControl(snapshot)
-
-                if !snapshot.hasCommits {
-                    Text("no commits yet").font(.system(size: 12)).foregroundStyle(.secondary)
-                }
-
-                if mode == .changes {
-                    Text(files.isEmpty ? "no changes" : counted(files.count, "file"))
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-
-                    if !files.isEmpty {
-                        DiffPair(added: snapshot.totalAdded, removed: snapshot.totalRemoved,
-                                 size: 13, spacing: 8, weight: .medium)
-                    }
-                }
-
-                Spacer().layoutValue(key: ChangesHeaderFlexibleSpace.self, value: true)
-                Text(syncStatus).font(.system(size: 11)).foregroundStyle(.secondary)
-
-                if let working {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text(working).font(.system(size: 12)).foregroundStyle(.secondary)
-                    }
-                } else if loading || loadingHistory {
-                    ProgressView().controlSize(.small)
-                }
-
-                if !files.isEmpty && mode == .changes {
-                    headerAction("Commit", icon: "checkmark.circle") {
-                        if committing {
-                            committing = false
-                        } else {
-                            beginCommit()
-                        }
-                    }
-                }
-                if snapshot.upstream != nil && snapshot.behind > 0 {
-                    headerAction("Pull", icon: "arrow.down", count: snapshot.behind) { pull() }
-                }
-                if snapshot.hasCommits && (snapshot.upstream == nil || snapshot.ahead > 0) {
-                    headerAction(snapshot.upstream == nil ? "Publish branch" : "Push", icon: "arrow.up", count: snapshot.ahead) {
-                        confirmPush(snapshot)
-                    }
+                ViewThatFits(in: .horizontal) {
+                    headerRow(snapshot, fit: HeaderFit())
+                    headerRow(snapshot, fit: HeaderFit(showsStatus: false))
+                    headerRow(snapshot, fit: HeaderFit(showsStatus: false, shortLabels: true))
+                    headerRow(snapshot, fit: HeaderFit(showsStatus: false, shortLabels: true,
+                                                       branchFloor: 120))
+                    headerRow(snapshot, fit: HeaderFit(showsStatus: false, shortLabels: true,
+                                                       branchFloor: 84, showsLabels: false))
                 }
             } else {
-                Text((root as NSString).lastPathComponent).font(.system(size: 13, weight: .medium))
-                Spacer().layoutValue(key: ChangesHeaderFlexibleSpace.self, value: true)
-                if loading { ProgressView().controlSize(.small) }
-            }
-
-            Button {
-                Task {
-                    await reload(fetchOrigin: true)
-                    feedback = snapshot?.state != .ready ? "Could not read Git status. Try Refresh again."
-                        : refreshFailed ? "Remote refresh failed. Try Refresh again." : "Git status refreshed."
-                    announce(feedback)
+                HStack(spacing: 14) {
+                    Text((root as NSString).lastPathComponent).font(.system(size: 13, weight: .medium))
+                    Spacer(minLength: 0)
+                    joinedControl { refreshButton }
                 }
-            } label: {
-                Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .semibold))
             }
-            .buttonStyle(.plain)
-            .hoverLift(amount: Motion.smallLift)
-            .foregroundStyle(Theme.accent)
-            .disabled(busy)
-            .appTooltip("Refresh Git status")
-            .accessibilityLabel("Refresh Git status")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -339,17 +287,182 @@ struct ChangesView: View {
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
-    private func branchControl(_ snapshot: GitSnapshot) -> some View {
+    private func headerRow(_ snapshot: GitSnapshot, fit: HeaderFit) -> some View {
+        HStack(spacing: 14) {
+            HeaderTabToggle(selection: $mode,
+                            options: [("Changes", .changes), ("History", .history)])
+                .fixedSize()
+            branchAndRemote(snapshot, fit: fit)
+                .layoutPriority(1)
+            Spacer(minLength: 0)
+            if !files.isEmpty && mode == .changes {
+                ActionButton(title: "Commit", height: 30, size: 12, icon: "checkmark.circle") {
+                    if committing {
+                        committing = false
+                    } else {
+                        beginCommit()
+                    }
+                }
+                .disabled(busy)
+            }
+        }
+    }
+
+    // Publish, push and pull are things done to the branch, so they sit inside the same
+    // control as its name. What the remote needs is then shown by the action itself, and
+    // a branch with nothing to send or fetch says so in the same place.
+    private func branchAndRemote(_ snapshot: GitSnapshot, fit: HeaderFit) -> some View {
+        joinedControl {
+            branchControl(snapshot, fit: fit)
+            joinedDivider
+            if let working {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    if fit.showsLabels {
+                        Text(working).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize()
+                    }
+                }
+                .padding(.horizontal, 11)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(working)
+            } else if snapshot.remoteActions.isEmpty {
+                remoteStatus(snapshot, fit: fit)
+            } else {
+                ForEach(Array(snapshot.remoteActions.enumerated()), id: \.element) { index, action in
+                    if index > 0 { joinedDivider }
+                    remoteButton(action, snapshot: snapshot, fit: fit)
+                }
+            }
+            joinedDivider
+            refreshButton
+        }
+    }
+
+    private func joinedControl<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 7.5)
+        return HStack(spacing: 0, content: content)
+            .frame(height: 30)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(Theme.border))
+    }
+
+    private var joinedDivider: some View {
+        Rectangle().fill(Theme.border).frame(width: 1)
+    }
+
+    private func branchControl(_ snapshot: GitSnapshot, fit: HeaderFit) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "arrow.triangle.branch").font(.system(size: 12))
-            Text(snapshot.branch).font(.mono(13, .medium)).lineLimit(1)
+            let name = Text(snapshot.branch).font(.mono(13, .medium)).lineLimit(1).truncationMode(.middle)
+            if let floor = fit.branchFloor {
+                ShrinkableWidth(floor: floor) { name }
+            } else {
+                name.fixedSize()
+            }
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
         .foregroundStyle(.primary)
+        .modifier(JoinedSegment())
         .appMenu { branchMenu(snapshot) }
         .appTooltip("Switch branch")
+        .accessibilityLabel("Branch \(snapshot.branch)")
+        .accessibilityHint(syncStatus)
+    }
+
+    private func remoteButton(_ action: GitRemoteAction, snapshot: GitSnapshot, fit: HeaderFit) -> some View {
+        let upstream = snapshot.upstream ?? "the remote"
+        let (label, short, icon, count, tooltip) = switch action {
+        case .pull(let count):
+            ("Pull", "Pull", "arrow.down", count, "Pull \(counted(count, "commit")) from \(upstream)")
+        case .push(let count):
+            ("Push", "Push", "arrow.up", count, "Push \(counted(count, "commit")) to \(upstream)")
+        case .publish:
+            ("Publish branch", "Publish", "arrow.up", 0, "Publish this branch to the remote")
+        }
+        return Button {
+            if case .pull = action { pull() } else { confirmPush(snapshot) }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+                if fit.showsLabels { Text(fit.shortLabels ? short : label).fixedSize() }
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.mono(10, .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Theme.field))
+                        .overlay(Capsule().stroke(Theme.border))
+                }
+            }
+            .modifier(JoinedSegment())
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .appTooltip(tooltip)
+        .accessibilityLabel(count > 0 ? "\(label), \(counted(count, "commit"))" : label)
+    }
+
+    // Shown in place of an action when the remote needs nothing, or when its state is
+    // not known. The words can give way; the icon, tooltip and spoken label keep them.
+    private func remoteStatus(_ snapshot: GitSnapshot, fit: HeaderFit) -> some View {
+        let (icon, text, tint): (String, String, Color) =
+            if refreshFailed {
+                ("exclamationmark.triangle", "Remote unavailable", Theme.attentionText)
+            } else if !snapshot.hasCommits {
+                ("circle.dashed", "No commits yet", .secondary)
+            } else if !snapshot.trackingKnown {
+                ("questionmark.circle", "Remote status unknown", .secondary)
+            } else {
+                ("checkmark", "In sync with " + remoteName(of: snapshot.upstream), Theme.dotOn)
+            }
+        return HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(tint)
+            if fit.showsStatus {
+                Text(text).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).fixedSize()
+            }
+        }
+        .padding(.horizontal, 11)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .appTooltip(syncStatus)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(syncStatus)
+    }
+
+    private func remoteName(of upstream: String?) -> String {
+        guard let upstream, let slash = upstream.firstIndex(of: "/") else { return "the remote" }
+        return String(upstream[..<slash])
+    }
+
+    private var refreshButton: some View {
+        Button {
+            Task {
+                await reload(fetchOrigin: true)
+                feedback = snapshot?.state != .ready ? "Could not read Git status. Try Refresh again."
+                    : refreshFailed ? "Remote refresh failed. Try Refresh again." : "Git status refreshed."
+                announce(feedback)
+            }
+        } label: {
+            Group {
+                if loading || loadingHistory {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
+                }
+            }
+            .foregroundStyle(.secondary)
+            .modifier(JoinedSegment(padding: 9))
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .appTooltip("Refresh Git status")
+        .accessibilityLabel("Refresh Git status")
     }
 
     private func branchMenu(_ snapshot: GitSnapshot) -> [MenuEntry] {
@@ -416,31 +529,6 @@ struct ChangesView: View {
             await GitActions.createBranch(branch, at: repoRoot)
         }
     }
-
-    private func headerAction(_ label: String, icon: String, count: Int = 0,
-                              action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 11, weight: .semibold))
-                Text(label).font(.system(size: 12, weight: .semibold))
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.mono(10, .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Theme.field))
-                        .overlay(Capsule().stroke(Theme.border))
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverLift()
-        .foregroundStyle(Theme.accent)
-        .disabled(busy)
-        .opacity(busy ? 0.4 : 1)
-    }
-
     // MARK: - Commit
 
     private var commitBar: some View {
@@ -1418,55 +1506,51 @@ private struct StatusChip: View {
     }
 }
 
-private struct ChangesHeaderLayout: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrange(subviews, width: proposal.width ?? 900).size
-    }
+// What the header row still shows. Each step down gives up one more thing, so the row
+// keeps to one line at any pane width.
+private struct HeaderFit {
+    var showsStatus = true
+    var shortLabels = false
+    // When set, the branch name may shorten down to this width.
+    var branchFloor: CGFloat?
+    var showsLabels = true
+}
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let layout = arrange(subviews, width: bounds.width)
-        for (index, point) in layout.points.enumerated() {
-            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
-                                 anchor: .topLeading, proposal: ProposedViewSize(width: min(bounds.width, subviews[index].sizeThatFits(.unspecified).width), height: nil))
-        }
-    }
+// One part of the joined branch control. The parts share one outline, so a part shows
+// hover as a fill rather than lifting out of the outline.
+private struct JoinedSegment: ViewModifier {
+    var padding: CGFloat = 11
 
-    private func arrange(_ subviews: Subviews, width: CGFloat) -> (size: CGSize, points: [CGPoint]) {
-        let sizes = subviews.map { view in
-            view.sizeThatFits(ProposedViewSize(width: min(width, view.sizeThatFits(.unspecified).width), height: nil))
-        }
-        var points = Array(repeating: CGPoint.zero, count: subviews.count)
-        var rowStart = 0
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var height: CGFloat = 0
-        func finishRow(endingAt end: Int) {
-            let space = max(0, width - x + 14)
-            var shift: CGFloat = 0
-            for index in rowStart..<end {
-                points[index].x += shift
-                points[index].y = y + (height - sizes[index].height) / 2
-                if subviews[index][ChangesHeaderFlexibleSpace.self] { shift = space }
-            }
-        }
-        for index in subviews.indices {
-            let size = sizes[index]
-            if x > 0 && x + size.width > width {
-                finishRow(endingAt: index)
-                rowStart = index
-                x = 0
-                y += height + 10
-                height = 0
-            }
-            points[index] = CGPoint(x: x, y: y)
-            x += size.width + 14
-            height = max(height, size.height)
-        }
-        finishRow(endingAt: subviews.count)
-        return (CGSize(width: width, height: y + height), points)
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, padding)
+            .frame(maxHeight: .infinity)
+            .background(hovering && isEnabled ? Theme.field : .clear)
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? 1 : 0.4)
+            .onHover { hovering = $0 }
     }
 }
 
-private struct ChangesHeaderFlexibleSpace: LayoutValueKey {
-    static let defaultValue = false
+// Lets a line of text shorten, but no further than a floor. Its ideal width is the floor,
+// so `ViewThatFits` picks the row with a shortened name before it drops any labels.
+private struct ShrinkableWidth: Layout {
+    let floor: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let natural = subviews[0].sizeThatFits(.unspecified)
+        let lowest = min(floor, natural.width)
+        guard let width = proposal.width else { return CGSize(width: lowest, height: natural.height) }
+        let fitted = max(lowest, min(width, natural.width))
+        return CGSize(width: fitted, height: subviews[0].sizeThatFits(ProposedViewSize(width: fitted, height: nil)).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                          proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
 }

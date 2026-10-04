@@ -95,7 +95,28 @@ struct GitSnapshot: Sendable, Equatable {
         return "Up to date with \(upstream) (last fetched)"
     }
 
+    // What the remote needs from this branch, in the order the header offers it: a pull
+    // comes first so a push after it is not refused.
+    var remoteActions: [GitRemoteAction] {
+        var actions: [GitRemoteAction] = []
+        if upstream != nil && behind > 0 { actions.append(.pull(behind)) }
+        if hasCommits {
+            if upstream == nil {
+                actions.append(.publish)
+            } else if ahead > 0 {
+                actions.append(.push(ahead))
+            }
+        }
+        return actions
+    }
+
     static func state(_ state: GitRepoState) -> GitSnapshot { GitSnapshot(state: state) }
+}
+
+enum GitRemoteAction: Sendable, Equatable, Hashable {
+    case pull(Int)
+    case push(Int)
+    case publish
 }
 
 // Which version of a file a diff put on its new side, so the lines it left out can be
