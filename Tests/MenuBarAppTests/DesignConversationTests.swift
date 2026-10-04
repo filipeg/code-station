@@ -33,6 +33,18 @@ struct DesignConversationLayoutTests {
         #expect(DesignConversationLayout.size(in: CGSize(width: 600, height: 600), expanded: true)
                 == CGSize(width: 576, height: 576))
     }
+
+    // Running and waiting share a colour, so the words are what tell them apart.
+    @Test func minimizedTabNamesEachStateInWords() {
+        #expect(DesignConversationLayout.minimizedHint(.running) == "Working")
+        #expect(DesignConversationLayout.minimizedHint(.waiting) == "Waiting")
+        #expect(DesignConversationLayout.minimizedHint(.needsYou) == "Needs you")
+        #expect(DesignConversationLayout.minimizedHint(.idle) == "Hover to expand")
+        #expect(DesignConversationLayout.minimizedAccessibilityValue(.running) == "Minimized, working")
+        #expect(DesignConversationLayout.minimizedAccessibilityValue(.waiting) == "Minimized, waiting")
+        #expect(DesignConversationLayout.minimizedAccessibilityValue(.needsYou) == "Minimized, needs you")
+        #expect(DesignConversationLayout.minimizedAccessibilityValue(.idle) == "Minimized")
+    }
 }
 
 @MainActor

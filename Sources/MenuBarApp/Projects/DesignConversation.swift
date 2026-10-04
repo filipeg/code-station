@@ -27,6 +27,25 @@ enum DesignConversationLayout {
         return available
     }
 
+    // The line under the title on the small tab. It names the state in words, so the state
+    // never rests on the colour of the ring alone.
+    static func minimizedHint(_ tone: SessionTone) -> String {
+        switch tone {
+        case .running: "Working"
+        case .waiting: "Waiting"
+        case .needsYou: "Needs you"
+        case .idle: "Hover to expand"
+        }
+    }
+
+    static func minimizedAccessibilityValue(_ tone: SessionTone) -> String {
+        switch tone {
+        case .running: "Minimized, working"
+        case .waiting: "Minimized, waiting"
+        case .needsYou: "Minimized, needs you"
+        case .idle: "Minimized"
+        }
+    }
 }
 
 // Observe presses without taking them away from the canvas or composer: a press on the

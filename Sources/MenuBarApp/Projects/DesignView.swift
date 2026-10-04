@@ -3,6 +3,7 @@ import SwiftUI
 
 // History and the composer share one floating surface over the canvas.
 struct DesignView: View {
+    @Environment(AppSettings.self) private var appSettings
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
@@ -150,7 +151,7 @@ struct DesignView: View {
         .accessibilityHidden(conversationMinimized)
         .overlay {
             if conversationMinimized {
-                minimizedConversation(needsYou: needsYou)
+                minimizedConversation(session, needsYou: needsYou)
             }
         }
         .frame(width: panelSize.width, height: panelSize.height)
@@ -187,27 +188,41 @@ struct DesignView: View {
 
     // A button as well as a hover target, so the panel can be brought back by keyboard
     // and by assistive tools too.
-    private func minimizedConversation(needsYou: Bool) -> some View {
-        Button {
+    //
+    // While the session is alive the bubble gives way to the session's bot, ringed in the
+    // state colour, and the bot breathes while a turn is being worked on, the way its
+    // avatar does in the sidebar. An idle tab keeps the bubble, so it looks as it always has.
+    private func minimizedConversation(_ session: ChatSession, needsYou: Bool) -> some View {
+        let tone: SessionTone = needsYou ? .needsYou
+            : runner.waitingSince(sessionID) != nil ? .waiting
+            : runner.state(sessionID).isBusy ? .running : .idle
+        let bot = AgentAvatarSelection.avatar(named: session.agentAvatarName, from: appSettings.agentAvatars)
+        return Button {
             conversationMinimized = false
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "bubble.left")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.accent)
+                if tone == .idle {
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.accent)
+                } else {
+                    Breathing(active: tone == .running) { phase in
+                        AgentAvatarView(image: bot.displayImage(for: sessionID), size: 30)
+                            .opacity(1 - 0.45 * phase)
+                    }
+                    .overlay(Circle().stroke(tone.colour, lineWidth: 1.5).padding(-3))
+                    .padding(.leading, -4)
+                    .accessibilityHidden(true)
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Conversation")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Hover to expand")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    Text(DesignConversationLayout.minimizedHint(tone))
+                        .font(.system(size: 11, weight: tone == .idle ? .regular : .medium))
+                        .foregroundStyle(tone.band?.word ?? Color.secondary)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if needsYou {
-                    StateLight(tone: .needsYou, size: 6)
-                } else if runner.state(sessionID).isBusy {
-                    StateLight(tone: .running, size: 6)
-                }
             }
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -218,8 +233,7 @@ struct DesignView: View {
             if inside { conversationMinimized = false }
         }
         .accessibilityLabel("Conversation")
-        .accessibilityValue(needsYou ? "Minimized, needs you"
-            : runner.state(sessionID).isBusy ? "Minimized, working" : "Minimized")
+        .accessibilityValue(DesignConversationLayout.minimizedAccessibilityValue(tone))
         .accessibilityHint("Show the conversation")
     }
 
