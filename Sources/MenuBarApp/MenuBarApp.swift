@@ -24,7 +24,7 @@ enum MenuBarApp {
 // `Window` scene, because openWindow(id:) does not reliably re-show a singleton
 // window once it has been closed. An AppKit window we own always comes back.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let store = ConfigStore()
     private let processes = ProcessManager()
     private let claude = ClaudeCodeManager()
@@ -118,12 +118,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // The window is the app, so closing it quits rather than leaving a process with no
-    // way back into it except the Dock.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+    // way back into it except the Dock. Waiting for the last window to close is not
+    // enough: a detached Design window, minimised or on another Space, would keep the
+    // app running unseen, so the main window decides on its own.
+    func windowWillClose(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        // Quitting from inside the close would tear the window down while AppKit is
+        // still closing it, so it waits for the close to finish.
+        DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 
-    // Reopening only happens when the app is already running, which now means the window
+    // Reopening only happens when the app is already running, which means the window
     // was hidden rather than closed, but the Dock icon still has to bring it back.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         showManager()
@@ -170,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             win.backgroundColor = Theme.backgroundNSColor
             win.isReleasedWhenClosed = false
             win.contentMinSize = NSSize(width: 960, height: 640)
+            win.delegate = self
             win.center()
             window = win
         }
