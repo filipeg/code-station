@@ -46,12 +46,17 @@ struct NewTaskView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                nameField
-                    .padding(.top, 18)
-                promptBox
-                    .padding(.top, 12)
-                whenSection
-                    .padding(.top, 16)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        nameField
+                            .padding(.top, 18)
+                        promptBox
+                            .padding(.top, 12)
+                        whenSection
+                            .padding(.top, 16)
+                    }
+                }
+                .frame(maxHeight: 470)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
@@ -102,9 +107,10 @@ struct NewTaskView: View {
                     asks(holes)
                 }
                 Spacer(minLength: 8)
-                SessionBotPicker(avatars: appSettings.agentAvatars,
-                                 selectedName: avatarBinding, size: 22)
-                agentMenu
+                AgentAndBotPicker(avatars: appSettings.agentAvatars,
+                                  selectedAvatarName: avatarBinding,
+                                  agentTitle: (agent ?? runner.agent).title,
+                                  agentMenu: agentMenu)
             }
             .padding(.leading, 14)
             .padding(.trailing, 10)
@@ -134,24 +140,13 @@ struct NewTaskView: View {
                 set: { avatarName = $0 })
     }
 
-    private var agentMenu: some View {
-        HStack(spacing: 4) {
-            Text((agent ?? runner.agent).title)
-                .font(.system(size: 11.5, weight: agent == nil ? .regular : .semibold))
-            Image(systemName: "chevron.down")
-                .font(.system(size: 7, weight: .semibold))
+    private var agentMenu: [MenuEntry] {
+        [.item("Use the default (\(runner.agent.title))", checked: agent == nil) {
+            agent = nil
+        }, .separator]
+        + AgentKind.allCases.map { kind in
+            .item(kind.title, checked: agent == kind) { agent = kind }
         }
-        .foregroundStyle(agent == nil ? Color.secondary : Theme.accent)
-        .fixedSize()
-        .appMenu {
-            [.item("Use the default (\(runner.agent.title))", checked: agent == nil) {
-                agent = nil
-            }, .separator]
-            + AgentKind.allCases.map { kind in
-                .item(kind.title, checked: agent == kind) { agent = kind }
-            }
-        }
-        .appTooltip("The coding agent each run starts on.")
     }
 
     // MARK: - When

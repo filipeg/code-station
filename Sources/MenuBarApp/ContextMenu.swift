@@ -247,6 +247,7 @@ private struct AppMenuButton: ViewModifier {
     // The menu this button opened, so the button can tell its own menu from the one
     // another control has since opened.
     @State private var opened: Int?
+    @FocusState private var triggerFocused: Bool
 
     private var isOpen: Bool { presenter.isOpen && presenter.generation == opened }
 
@@ -258,6 +259,11 @@ private struct AppMenuButton: ViewModifier {
         }
         .buttonStyle(.plain)
         .background(FrameAnchorView(anchor: anchor))
+        .focused($triggerFocused)
+        .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
+        .onChange(of: isOpen) { wasOpen, nowOpen in
+            if wasOpen && !nowOpen && !presenter.isOpen { triggerFocused = true }
+        }
     }
 
     // The menu hangs off the requested edge of the button. Both edges are passed on so

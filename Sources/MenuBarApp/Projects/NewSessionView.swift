@@ -53,46 +53,31 @@ struct NewSessionView: View {
             // sheet that asks for more height than the window has is not shrunk but
             // clipped, and since it is clipped from the middle out, the footer and its
             // Create button are the first things to go.
-            ScrollViewReader { scroll in
-                ScrollView {
-                    VStack(spacing: 10) {
-                        CheckoutModePicker(
-                            usesWorktree: useWorktree,
-                            supportsWorktree: project.isGitRepository,
-                            branch: project.isGitRepository
-                                ? (useWorktree ? planned.branch : GitHead.branch(at: project.path))
-                                : nil,
-                            path: useWorktree ? planned.path.abbreviatedPath : project.collapsedPath,
-                            selectWorktree: selectWorktree,
-                            selectProjectFolder: selectProjectFolder)
-                            .padding(14)
-                            .cardSurface(cornerRadius: 11)
-
-                        if let report = freshness, showsFreshnessNotice {
-                            FreshnessNotice(report: report, forWorktree: useWorktree,
-                                            startPoint: $startPoint) {
-                                startPointWasChosen = true
-                            }
-                            .id(Self.freshnessNoticeID)
-                            .transition(.fadeIn)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    SessionProjectCard(project: project, usesWorktree: useWorktree,
+                                       report: freshness, startPoint: $startPoint,
+                                       selectWorktree: selectWorktree,
+                                       selectProjectFolder: selectProjectFolder,
+                                       onChoose: { startPointWasChosen = true })
+                    SessionCheckoutPaths(entries: [
+                        .init(name: project.name,
+                              branch: project.isGitRepository
+                                ? (useWorktree ? planned.branch : GitHead.branch(at: project.path)) : nil,
+                              path: useWorktree ? planned.path.abbreviatedPath : project.collapsedPath)
+                    ])
+                    Text(footerNote)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
-                // The warning arrives after the checkout has been read, by which time the
-                // sheet already has a height. Where it cannot grow, the warning lands
-                // below the fold, so it is brought into view rather than left unseen.
-                .onChange(of: showsFreshnessNotice) { _, shows in
-                    guard shows else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        scroll.scrollTo(Self.freshnessNoticeID, anchor: .bottom)
-                    }
-                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
             }
+            .frame(maxHeight: 470)
 
             NewSessionFooter(sessionID: sessionID,
-                             note: footerNote,
+                             note: SessionCreationImpact(updates: startPoint == .updateCheckout && freshness?.canUpdateCheckout == true ? 1 : 0,
+                                                         worktrees: useWorktree ? 1 : 0).text,
                              fetching: fetching,
                              updating: pulling ? (freshness?.defaultBranch ?? "the checkout") : nil,
                              selectedAgent: $selectedAgent,
@@ -100,7 +85,7 @@ struct NewSessionView: View {
                              create: create,
                              dismiss: { dismiss() })
         }
-        .frame(width: 560)
+        .frame(width: 680)
         .background(Theme.background)
         .disabled(pulling)
         .interactiveDismissDisabled(pulling)
@@ -123,7 +108,7 @@ struct NewSessionView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("New session in \(project.name)")
-                .font(.serif(19))
+                .font(.serif(22, .semibold))
                 .lineLimit(2)
             Text(project.isGitRepository
                  ? "\(project.name) is a git repository, so this session can have a checkout of its own."
@@ -136,16 +121,9 @@ struct NewSessionView: View {
         .padding(20)
     }
 
-    private static let freshnessNoticeID = "freshness-notice"
-
-    private var showsFreshnessNotice: Bool {
-        guard project.isGitRepository, let report = freshness else { return false }
-        return report.isStale || (useWorktree && report.dirty)
-    }
-
     private var footerNote: String {
         project.isGitRepository && useWorktree
-            ? "A worktree is removed when its session is deleted."
+            ? "Worktrees are isolated checkouts. Deleting this session removes its worktree."
             : "Changes land straight in your project folder."
     }
 
@@ -235,21 +213,25 @@ struct FreshnessNotice: View {
     let forWorktree: Bool
     @Binding var startPoint: SessionStartPoint
     let onChoose: () -> Void
+    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
-                    .foregroundStyle(Theme.attention)
+                    .foregroundStyle(Theme.attentionText)
                 VStack(alignment: .leading, spacing: 3) {
                     if let concern {
                         Text(concern)
+                            .foregroundStyle(Theme.attentionText)
                             .font(.system(size: 12.5))
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if forWorktree && report.dirty {
-                        Text("Uncommitted changes in the project folder stay behind: a worktree starts from the last commit.")
+                    if report.dirty {
+                        Text(forWorktree
+                             ? "Uncommitted changes in the project folder stay behind: a worktree starts from the last commit."
+                             : "The project folder has uncommitted changes. This session edits them directly.")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -257,21 +239,52 @@ struct FreshnessNotice: View {
                 }
             }
             if report.isStale {
-                if forWorktree, let remote = report.remoteRef {
-                    choice(.remote,
-                           title: "Start from \(remote)\(report.defaultBranchHasDiverged ? " (Recommended)" : "")",
-                           detail: remoteDetail)
+                DisclosureHeader(isExpanded: $expanded, show: "Change start point", hide: "Hide start choices") {
+                    HStack {
+                        Text(selectedTitle).font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        Text("Change").font(.system(size: 12)).foregroundStyle(Theme.accent)
+                    }
                 }
-                if report.canUpdateCheckout, let title = updateTitle {
-                    choice(.updateCheckout, title: title, detail: updateDetail)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                Text(selectedDetail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if expanded {
+                    if forWorktree, let remote = report.remoteRef {
+                        choice(.remote,
+                               title: "Start from \(remote)\(report.defaultBranchHasDiverged ? " (Recommended)" : "")",
+                               detail: remoteDetail)
+                    }
+                    if report.canUpdateCheckout, let title = updateTitle {
+                        choice(.updateCheckout, title: title, detail: updateDetail)
+                    }
+                    choice(.currentCheckout, title: currentTitle, detail: currentDetail)
                 }
-                choice(.currentCheckout, title: currentTitle, detail: currentDetail)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .surface(Theme.attention.opacity(0.08), cornerRadius: 11,
-                 border: Theme.attention.opacity(0.3))
+        .padding(14)
+        .background(Theme.sunken)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Checkout start point")
+    }
+
+    private var selectedTitle: String {
+        switch startPoint {
+        case .remote: "Start from \(report.remoteRef ?? "the remote branch")"
+        case .updateCheckout: updateTitle ?? currentTitle
+        case .currentCheckout: currentTitle
+        }
+    }
+
+    private var selectedDetail: String {
+        switch startPoint {
+        case .remote: remoteDetail
+        case .updateCheckout: updateDetail
+        case .currentCheckout: currentDetail
+        }
     }
 
     private func choice(_ value: SessionStartPoint, title: String, detail: String) -> some View {
@@ -299,6 +312,7 @@ struct FreshnessNotice: View {
         }
         .buttonStyle(.plain)
         .hoverFill(cornerRadius: 6)
+        .accessibilityAddTraits(startPoint == value ? .isSelected : [])
         .padding(.leading, 19)
     }
 
@@ -308,15 +322,15 @@ struct FreshnessNotice: View {
             return "Rebase \(branch) onto \(remote), then start"
         }
         return report.onDefaultBranch
-            ? "Update \(branch) to \(remote), then start"
+            ? "Update \(branch), then start"
             : "Switch to \(branch), update it to \(remote), then start"
     }
 
     private var updateDetail: String {
         if report.defaultBranchHasDiverged {
-            return "Keeps \(counted(report.defaultBranchAhead, "local commit")) and includes \(counted(report.defaultBranchBehind, "remote commit"))."
+            return "Updates the project folder, keeping \(counted(report.defaultBranchAhead, "local commit")) and including \(counted(report.defaultBranchBehind, "remote commit"))."
         }
-        return "Changes the project folder before the session is created."
+        return "Updates \(report.defaultBranch ?? "the default branch") to \(report.remoteRef ?? "the remote branch") in the project folder."
     }
 
     private var remoteDetail: String {
@@ -366,17 +380,15 @@ struct FreshnessNotice: View {
 struct CheckoutModePicker: View {
     let usesWorktree: Bool
     let supportsWorktree: Bool
-    let branch: String?
-    let path: String
     let selectWorktree: () -> Void
     let selectProjectFolder: () -> Void
 
     private var detail: String {
         if usesWorktree {
-            return "Isolated checkout. Several sessions can run at once."
+            return "Work in an isolated checkout"
         }
         if supportsWorktree {
-            return "Edits this checkout directly. Sessions that share it cannot run together."
+            return "Work directly in your existing folder"
         }
         return "This folder is not a Git repository, so the session uses it directly."
     }
@@ -398,42 +410,39 @@ struct CheckoutModePicker: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                ChoicePill(title: "Worktree", selected: usesWorktree,
-                           enabled: supportsWorktree, choose: selectWorktree)
-                    .appTooltip { worktreeTooltip }
-                    .accessibilityHint(worktreeAccessibilityHint)
-                ChoicePill(title: "Project folder", selected: !usesWorktree,
-                           choose: selectProjectFolder)
-                    .appTooltip {
-                        Tooltip(
-                            title: "Project folder",
-                            subtitle: "Edit the existing checkout directly. Sessions that share this folder cannot run together.")
-                    }
-                    .accessibilityHint("Edits the existing checkout directly, one session at a time.")
-                Spacer(minLength: 8)
-                HStack(spacing: 6) {
-                    if let branch {
-                        Label(branch, systemImage: "arrow.triangle.branch")
-                            .font(.mono(11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Text("·")
-                            .font(.mono(11))
-                            .foregroundStyle(.tertiary)
-                    }
-                    Text(path)
-                        .font(.mono(11.5))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) {
+                choices
+                helper
             }
-            Text(detail)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 7) {
+                choices
+                helper
+            }
         }
+    }
+
+    private var helper: some View {
+        Text(detail)
+            .font(.system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var choices: some View {
+        HStack(spacing: 8) {
+            ChoicePill(title: "Worktree", selected: usesWorktree,
+                       enabled: supportsWorktree, choose: selectWorktree)
+                .appTooltip { worktreeTooltip }
+                .accessibilityHint(worktreeAccessibilityHint)
+            ChoicePill(title: "Project folder", selected: !usesWorktree,
+                       choose: selectProjectFolder)
+                .appTooltip {
+                    Tooltip(title: "Project folder",
+                            subtitle: "Edit the existing checkout directly. Sessions that share this folder cannot run together.")
+                }
+                .accessibilityHint("Edits the existing checkout directly, one session at a time.")
+        }
+        .fixedSize()
     }
 }
