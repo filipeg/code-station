@@ -150,6 +150,21 @@ struct PromptSuggestionRunnerTests {
         #expect(try Self.starts(harness) == "work\nsuggest\n")
     }
 
+    @Test func codexSuggestionsUseTheSessionModel() async throws {
+        let harness = try RunnerHarness(agent: .codex, script: Self.script(.codex),
+                                        promptSuggestionsEnabled: { true })
+        defer { harness.tearDown() }
+        harness.store.setSettings(SessionSettings(model: "gpt-5.6-sol"),
+                                  for: harness.session.id)
+        harness.runner.send("Fix the login retry", sessionID: harness.session.id,
+                            store: harness.store)
+        #expect(await waitUntil { harness.runner.suggestion(harness.session.id) != nil })
+        let arguments = try String(contentsOf: harness.scratch.path("suggestion-arguments"),
+                                   encoding: .utf8).split(separator: "\n").map(String.init)
+        let modelFlag = try #require(arguments.firstIndex(of: "-m"))
+        #expect(arguments[modelFlag + 1] == "gpt-5.6-sol")
+    }
+
     @Test func sendsTheSuggestionAsItsOwnTurnAndLeavesTheRestOfTheDraftAlone() async throws {
         let harness = try RunnerHarness(agent: .claudeCode, script: Self.script(.claudeCode),
                                         promptSuggestionsEnabled: { true })
@@ -271,6 +286,7 @@ struct PromptSuggestionRunnerTests {
         \(agent == .codex ? "input=$(cat)" : "")
         case "$*" in
             *'Return only the prompt.'*)
+                printf '%s\\n' "$@" > "$folder/suggestion-arguments"
                 printf 'suggest\\n' >> "$folder/starts"
                 \(suggestion)
                 exit 0

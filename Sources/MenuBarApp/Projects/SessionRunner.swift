@@ -1060,6 +1060,8 @@ final class SessionRunner {
         let token = UUID()
         suggestionRequests[sessionID] = token
         let agent = session.agent
+        let model = ModelChoice.valid(session.settings?.model, for: agent,
+                                      discovered: discoveredModels[agent])
         let searchPath = ProcessManager.searchPath
         let prompt = PromptSuggestion.conversationTail(lastPrompt: asked.text,
                                                        lastReply: reply.text)
@@ -1067,8 +1069,10 @@ final class SessionRunner {
         Task { [weak self] in
             let suggestion = await PromptSuggestion.read(
                 agent: agent, at: path, searchPath: searchPath,
-                workingDirectory: directory, prompt: prompt)
+                workingDirectory: directory, prompt: prompt, model: model)
             await MainActor.run {
+                SessionLog.note(suggestion == nil ? "no prompt suggestion returned"
+                                : "prompt suggestion received", session: sessionID)
                 guard let self, self.suggestionRequests[sessionID] == token,
                       let suggestion, self.promptSuggestionsEnabled() else { return }
                 self.records[sessionID]?.suggestion = suggestion
