@@ -82,6 +82,22 @@ final class ShellRegistry: @unchecked Sendable {
         directory.appendingPathComponent("\(shell.pid)-\(shell.startedAt).json")
     }
 
+    // What this run has written down and is still running. A command a turn started can
+    // lose its parent long before the app quits, and then this list is the only thing
+    // that still ties it to the app.
+    func running() -> [ProcessIdentity] {
+        guard let owner else { return [] }
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil)) ?? []
+        return files.compactMap { note in
+            guard note.pathExtension == "json",
+                  let data = try? PersistentFile.readIfPresent(note),
+                  let entry = try? JSONDecoder().decode(Marker.self, from: data),
+                  entry.owner == owner, entry.shell.isAlive else { return nil }
+            return entry.shell
+        }
+    }
+
     // MARK: - Closing
 
     // Hangs a shell up and drops its note once it has gone. The hangup is sent before this

@@ -255,7 +255,7 @@ final class SessionMemoryGuard: @unchecked Sendable {
         return name.isEmpty ? nil : name
     }
 
-    private static func processes() -> [ProcessEntry]? {
+    static func processes() -> [ProcessEntry]? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
         let stride = MemoryLayout<kinfo_proc>.stride
         // Process creation can outgrow the buffer between the size query and the read.

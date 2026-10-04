@@ -184,11 +184,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Taken first: stopping a process can orphan its children, and an orphan no
+        // longer shows up as something the app started.
+        let leftovers = QuitSweep.snapshot()
         processes.stopAll()
         shortcuts.stopAll()
         runner.stopAll()
         terminals.stopEverything()
         mobileAccess.stop()
+        // Blocking here is deliberate. While the main thread waits, nothing can react to
+        // a process ending by starting the next one, such as a queued prompt.
+        let swept = leftovers.finish()
+        if swept.killed > 0 {
+            SessionLog.note("app quitting: killed \(counted(swept.killed, "process", plural: "processes")) "
+                            + "that ignored the stop, \(swept.left) still running")
+            SessionLog.flush()
+        }
         projects.save()
         dispatch.save()
         dispatchAuth.save()

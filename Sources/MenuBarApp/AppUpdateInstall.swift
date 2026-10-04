@@ -216,7 +216,7 @@ enum AppUpdateInstall {
             throw Failure(reason: "The updated app could not be started.")
         }
         defer { try? null.close() }
-        _ = try CommandRunner.spawnIsolatedProcess(
+        let helper = try CommandRunner.spawnIsolatedProcess(
             executable: "/bin/sh",
             arguments: ["-c", script],
             currentDirectory: nil,
@@ -225,6 +225,7 @@ enum AppUpdateInstall {
             standardOutput: null.fileDescriptor,
             standardError: null.fileDescriptor,
             descriptorsToClose: [])
+        QuitSweep.spare(helper)
     }
 }
 
