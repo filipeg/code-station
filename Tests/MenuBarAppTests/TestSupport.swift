@@ -179,7 +179,7 @@ final class RunnerHarness {
 
     var projectURL: URL { scratch.path("project") }
 
-    init(agent: AgentKind, script: String,
+    init(agent: AgentKind, script: String, persistentAgentSessions: Bool = false,
          stalledAfter: TimeInterval = 5 * 60,
          stallCheckInterval: Duration = .seconds(5),
          waitingStaleAfter: TimeInterval = 10 * 60,
@@ -195,7 +195,7 @@ final class RunnerHarness {
         store = ProjectStore(storeURL: scratch.path("projects.json"))
         let project = try #require(store.addProject(at: scratch.path("project")))
         session = try store.insertSession(in: project.id, seed: .init(agent: agent)).get()
-        runner = SessionRunner(paths: [agent: executable.path],
+        runner = SessionRunner(persistentAgentSessions: persistentAgentSessions, paths: [agent: executable.path],
                                stalledAfter: stalledAfter,
                                stallCheckInterval: stallCheckInterval,
                                waitingStaleAfter: waitingStaleAfter,

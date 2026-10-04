@@ -411,7 +411,7 @@ struct DesignSessionTests {
         _ = try store.beginImplementation(original.id, revisionID: revision.id).get()
         let build = try #require(store.session(original.id))
         let design = try #require(store.designSession(for: build.id))
-        let runner = SessionRunner(paths: [.codex: executable.path])
+        let runner = SessionRunner(persistentAgentSessions: false, paths: [.codex: executable.path])
         defer { runner.stopAll() }
 
         runner.send("Build the screen", sessionID: build.id, store: store)

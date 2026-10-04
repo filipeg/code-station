@@ -150,6 +150,7 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
     // with the task. The description is the fallback: a task is named after the very line
     // the call was given, so the newest shell call carrying that line is the one meant.
     func shellCommand(for task: BackgroundTask) -> String? {
+        if let command = task.command, !command.isBlank { return command }
         if let toolUseID = task.toolUseID,
            let command = shellCommand(matching: { $0.id == toolUseID }) {
             return command

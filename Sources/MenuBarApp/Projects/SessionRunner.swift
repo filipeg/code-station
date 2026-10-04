@@ -157,7 +157,9 @@ final class SessionRunner {
     Inspect the current state and continue only the unfinished parts of the previous request. Do not repeat work or side effects that are already complete.
     """
 
-    init(configs: ConfigStore? = nil, paths: [AgentKind: String]? = nil,
+    private let persistentAgentSessions: Bool
+
+    init(configs: ConfigStore? = nil, persistentAgentSessions: Bool = true, paths: [AgentKind: String]? = nil,
          discoveredModels: [AgentKind: [ModelChoice.Option]] = [:],
          stalledAfter: TimeInterval = 5 * 60,
          stallCheckInterval: Duration = .seconds(5),
@@ -175,6 +177,7 @@ final class SessionRunner {
              Preferences.promptSuggestionsEnabled()
          }) {
         self.configs = configs
+        self.persistentAgentSessions = persistentAgentSessions
         self.discoveredModels = discoveredModels
         self.stalledAfter = stalledAfter
         self.stallCheckInterval = stallCheckInterval
@@ -360,8 +363,15 @@ final class SessionRunner {
         SessionLog.note("wait ended by hand with \(wait.tasks.count) tasks running",
                         session: sessionID)
         endHold(turn, sessionID: sessionID)
-        stopStartedGroups(sessionID, reason: "wait ended by hand")
-        turn.closeInput()
+        turn.endingWait = true
+        if let connection = turn.connection {
+            if !connection.cancelTasks() {
+                requestStop(sessionID, failure: "Could not stop the agent's background tasks.")
+            }
+        } else {
+            stopStartedGroups(sessionID, reason: "wait ended by hand")
+            turn.closeInput()
+        }
     }
 
     // The card offering this says that ending the turn stops the tasks it started, and a
@@ -419,11 +429,12 @@ final class SessionRunner {
                 settings.permissionMode ?? defaults(for: session.agent).permissionMode)
         }
 
-        guard let line = request.responseLine(answer, leavingPlanFor: leavingPlanFor),
-              turn.write(line) else {
+        let sent = turn.connection.map { $0.answer(request, with: answer) }
+            ?? request.responseLine(answer, leavingPlanFor: leavingPlanFor).map(turn.write) ?? false
+        guard sent else {
             requestStop(
                 sessionID,
-                failure: "Could not send the answer to Claude Code. The turn has been stopped.")
+                failure: "Could not send the answer to \(turn.agent.title). The turn has been stopped.")
             return
         }
 
@@ -1940,6 +1951,7 @@ final class SessionRunner {
         // Whether the CLI was asked to predict the next prompt, which it also needs
         // saying in its environment.
         var suggestsPrompts = false
+        var serverLaunch: AgentServerLaunch?
     }
 
     private func turnPlan(for session: ChatSession, prompt: String, attachments: [Attachment],
@@ -1989,9 +2001,12 @@ final class SessionRunner {
             } ?? implementationReference.map(Self.implementationSystemPrompt),
             suggestsPrompts: suggestsPrompts,
             discovered: discoveredModels[agent])
-        return TurnPlan(agent: agent, arguments: arguments, prompt: promptForAgent,
+        let serverLaunch = persistentAgentSessions && agent != .claudeCode
+            ? try AgentServerLaunch(agent: agent, arguments: arguments,
+                                    directory: workingDirectories[0], resumeID: resume) : nil
+        return TurnPlan(agent: agent, arguments: serverLaunch?.arguments ?? arguments, prompt: promptForAgent,
                         resumeSessionID: resume, presetSessionID: presetSessionID,
-                        suggestsPrompts: suggestsPrompts)
+                        suggestsPrompts: suggestsPrompts, serverLaunch: serverLaunch)
     }
 
     // Starts the process and wires up everything that listens to it: the two output
@@ -2059,6 +2074,15 @@ final class SessionRunner {
         let buffer = LineBuffer()
         let stream = StreamBatcher()
 
+        let connection = plan.serverLaunch.map { launch in
+            AgentSessionConnection(launch: launch) { data in
+                do {
+                    try input.fileHandleForWriting.write(contentsOf: data)
+                    return true
+                } catch { return false }
+            }
+        }
+        turn.connection = connection
         let copilotStream = CopilotStream()
         let parseLine: @Sendable (String) -> [StreamEvent] = { line in
             let events = switch agent {
@@ -2093,7 +2117,10 @@ final class SessionRunner {
                 }
                 return
             }
-            let events = buffer.lines(from: data).flatMap(parseLine)
+            let events = connection?.receive(data) ?? buffer.lines(from: data).flatMap(parseLine)
+            if connection != nil, !events.isEmpty {
+                SessionLog.note("< " + events.map(\.logSummary).joined(separator: ", "), session: sessionID)
+            }
             // Even a line that means nothing to the app proves the CLI is alive, so the
             // clock moves on the read rather than on the events it turned into.
             if stream.append(events: events, stdoutActivity: true) {
@@ -2158,6 +2185,18 @@ final class SessionRunner {
             }
         }
         exitMonitor.activate()
+        if let connection {
+            turn.taskRefresh = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    if !connection.refreshTasks() {
+                        self?.requestStop(sessionID, failure: "Could not refresh the agent's background tasks.")
+                        return
+                    }
+                }
+            }
+        }
         return turn
     }
 
@@ -2165,19 +2204,23 @@ final class SessionRunner {
     // handed over leaves a process with nothing to do, so the turn is stopped there.
     private func handOver(_ prompt: String, to turn: Turn, sessionID: UUID) {
         let sent: Bool
-        switch turn.agent {
-        case .claudeCode:
-            sent = Self.userMessageLine(prompt).map(turn.write) ?? false
-        case .codex:
-            // Codex reads the prompt off stdin until the pipe closes, and nothing
-            // ever goes back down it: there are no questions to answer mid-turn.
-            sent = turn.write(Data((prompt + "\n").utf8))
-            if sent { turn.closeInput() }
-        case .copilot:
-            // Copilot was given the prompt as an argument, and it waits for stdin to
-            // close before it starts, so the pipe is shut straight away.
-            sent = true
-            turn.closeInput()
+        if let connection = turn.connection {
+            sent = connection.start(prompt)
+        } else {
+            switch turn.agent {
+            case .claudeCode:
+                sent = Self.userMessageLine(prompt).map(turn.write) ?? false
+            case .codex:
+                // Codex reads the prompt off stdin until the pipe closes, and nothing
+                // ever goes back down it: there are no questions to answer mid-turn.
+                sent = turn.write(Data((prompt + "\n").utf8))
+                if sent { turn.closeInput() }
+            case .copilot:
+                // Copilot was given the prompt as an argument, and it waits for stdin to
+                // close before it starts, so the pipe is shut straight away.
+                sent = true
+                turn.closeInput()
+            }
         }
         guard sent else {
             requestStop(sessionID, failure:
@@ -2362,6 +2405,10 @@ final class SessionRunner {
                     turn.agentSessionID = claudeSessionID
                     store.setAgentSessionID(claudeSessionID, agent: turn.agent, for: sessionID)
                 }
+
+            case .turnStarted:
+                freshReply(turn, sessionID: sessionID, store: store)
+                setState(.streaming, for: sessionID)
 
             case .text(let text):
                 setState(.streaming, for: sessionID)
@@ -2637,11 +2684,16 @@ final class SessionRunner {
                 if !isError, turn.summary == nil, !turn.pendingTasks.isEmpty {
                     SessionLog.note("holding turn open for background tasks \(turn.pendingTasks.map(\.id).sorted())",
                                     session: sessionID)
+                    let alreadyWaiting = turn.waitingOnTasks
                     turn.waitingOnTasks = true
-                    records[sessionID]?.wait = Wait(tasks: turn.pendingTasks, since: Date())
+                    if alreadyWaiting {
+                        records[sessionID]?.wait?.tasks = turn.pendingTasks
+                    } else {
+                        records[sessionID]?.wait = Wait(tasks: turn.pendingTasks, since: Date())
+                    }
                     turn.needsFreshReply = true
                     setState(.waiting, for: sessionID)
-                    startWaitWatchdog(sessionID, token: turn.token, store: store)
+                    if !alreadyWaiting { startWaitWatchdog(sessionID, token: turn.token, store: store) }
                     // A prompt typed while the agent was working can go down the open
                     // pipe now instead of sitting behind the task.
                     injectQueued(sessionID, store: store)
@@ -2649,6 +2701,8 @@ final class SessionRunner {
                 }
                 // Nothing more is coming, and the CLI keeps its input stream open waiting
                 // for another message, so this is where the turn is let go.
+                if turn.endingWait { stopStartedGroups(sessionID, reason: "wait ended by hand") }
+                endHold(turn, sessionID: sessionID)
                 turn.closeInput()
             }
         }
@@ -2834,7 +2888,9 @@ final class SessionRunner {
         let prompt = Self.prompt(next.prompt, with: next.attachments)
         // A failed write means the pipe is gone; the prompt stays queued and starts a
         // fresh process once this turn winds down.
-        guard let line = Self.userMessageLine(prompt), turn.write(line) else { return }
+        let sent = turn.connection.map { $0.send(prompt) }
+            ?? Self.userMessageLine(prompt).map(turn.write) ?? false
+        guard sent else { return }
         records[sessionID]?.queue.removeFirst()
         SessionLog.note("prompt sent into waiting turn", session: sessionID)
 
@@ -3191,6 +3247,8 @@ final class SessionRunner {
 
     private func cleanUp(_ turn: Turn) {
         turn.memoryGuard?.stop()
+        turn.taskRefresh?.cancel()
+        turn.taskRefresh = nil
         turn.stallWatchdog?.cancel()
         turn.stallWatchdog = nil
         turn.output.fileHandleForReading.readabilityHandler = nil
@@ -3216,6 +3274,8 @@ final class SessionRunner {
         let errorOutput: Pipe
         var exitMonitor: DispatchSourceProcess?
         var memoryGuard: SessionMemoryGuard?
+        var connection: AgentSessionConnection?
+        var taskRefresh: Task<Void, Never>?
         private var inputOpen = true
         let prompt: String
         // The folder the agent was started in, which is the checkout a call's writes land
@@ -3258,6 +3318,7 @@ final class SessionRunner {
         // True from a result that left tasks running until the CLI moves again or a
         // prompt is sent into the open pipe. This is what holds the input open.
         var waitingOnTasks = false
+        var endingWait = false
         // True when whatever streams next belongs in a reply bubble of its own, because
         // the last one was already closed off by a result.
         var needsFreshReply = false
@@ -3291,6 +3352,7 @@ final class SessionRunner {
         func closeInput() {
             guard inputOpen else { return }
             inputOpen = false
+            connection?.close()
             try? input.fileHandleForWriting.close()
         }
 
