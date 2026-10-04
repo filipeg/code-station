@@ -146,7 +146,6 @@ struct MenuItem {
 @Observable
 final class MenuPresenter {
     private(set) var entries: [MenuEntry] = []
-    private(set) var keyboardNavigation = false
     private(set) var origin: CGPoint = .zero
     // Set when the menu should take the width of the control that opened it rather
     // than the width of its own rows, so it reads as an extension of that control.
@@ -166,9 +165,7 @@ final class MenuPresenter {
     @discardableResult
     func show(_ entries: [MenuEntry], at point: CGPoint, width: CGFloat? = nil,
               trailingAnchor: CGFloat? = nil,
-              verticalAttachment: MenuVerticalAttachment = .point,
-              keyboardNavigation: Bool = false) -> Int {
-        self.keyboardNavigation = keyboardNavigation
+              verticalAttachment: MenuVerticalAttachment = .point) -> Int {
         self.entries = entries
         origin = point
         self.width = width.map { max($0, menuMinimumWidth) }
@@ -221,11 +218,9 @@ extension View {
     // slow external state current without delaying the menu opening.
     func appMenu(edge: VerticalEdge = .bottom,
                  matchWidth: Bool = false,
-                 keyboardNavigation: Bool = false,
                  refreshOnOpen: (() async -> Void)? = nil,
                  _ entries: @escaping () -> [MenuEntry]) -> some View {
         modifier(AppMenuButton(edge: edge, matchWidth: matchWidth,
-                               keyboardNavigation: keyboardNavigation,
                                refreshOnOpen: refreshOnOpen, entries: entries))
     }
 }
@@ -245,8 +240,6 @@ private struct AppMenuButton: ViewModifier {
     @Environment(MenuPresenter.self) private var presenter
     let edge: VerticalEdge
     let matchWidth: Bool
-    let keyboardNavigation: Bool
-    @FocusState private var focused: Bool
     let refreshOnOpen: (() async -> Void)?
     let entries: () -> [MenuEntry]
 
@@ -265,10 +258,6 @@ private struct AppMenuButton: ViewModifier {
         }
         .buttonStyle(.plain)
         .background(FrameAnchorView(anchor: anchor))
-        .focused($focused)
-        .onChange(of: isOpen) { wasOpen, isOpen in
-            if keyboardNavigation, wasOpen, !isOpen { focused = true }
-        }
     }
 
     // The menu hangs off the requested edge of the button. Both edges are passed on so
@@ -281,8 +270,7 @@ private struct AppMenuButton: ViewModifier {
             width: matchWidth ? frame.width : nil,
             trailingAnchor: frame.maxX,
             verticalAttachment: .control(
-                edge: edge, oppositeY: edge == .bottom ? frame.minY - 4 : frame.maxY + 4),
-            keyboardNavigation: keyboardNavigation)
+                edge: edge, oppositeY: edge == .bottom ? frame.minY - 4 : frame.maxY + 4))
         opened = generation
         guard let refreshOnOpen else { return }
         Task { @MainActor in
@@ -342,7 +330,6 @@ struct ContextMenuHost: View {
     @Environment(MenuPresenter.self) private var presenter
 
     @State private var measurement = OverlayMeasurement()
-    @FocusState private var focusedItem: Int?
 
     private var size: CGSize { measurement.size }
 
@@ -422,16 +409,11 @@ struct ContextMenuHost: View {
         // A check and an icon share one slot unless a row needs to show both.
         let usesSharedMarkColumn = hasChecks && hasIcons && !hasCheckedIcons
 
-        return ScrollViewReader { scroll in
-            MenuContentScrollView(maxHeight: maxHeight) {
-                menuContent(hasChecks: hasChecks,
-                            hasIcons: hasIcons,
-                            hasTints: hasTints,
-                            usesSharedMarkColumn: usesSharedMarkColumn)
-            }
-            .onChange(of: focusedItem) { _, index in
-                if presenter.keyboardNavigation, let index { scroll.scrollTo(index) }
-            }
+        return MenuContentScrollView(maxHeight: maxHeight) {
+            menuContent(hasChecks: hasChecks,
+                        hasIcons: hasIcons,
+                        hasTints: hasTints,
+                        usesSharedMarkColumn: usesSharedMarkColumn)
         }
         .frame(minWidth: menuMinimumWidth, alignment: .leading)
         .floatingCard(cornerRadius: 11)
@@ -442,7 +424,7 @@ struct ContextMenuHost: View {
                              hasTints: Bool,
                              usesSharedMarkColumn: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(presenter.entries.enumerated()), id: \.offset) { index, entry in
+            ForEach(Array(presenter.entries.enumerated()), id: \.offset) { _, entry in
                 switch entry {
                 case .item(let item):
                     MenuItemRow(item: item,
@@ -453,15 +435,6 @@ struct ContextMenuHost: View {
                                 action: item.handler == nil ? nil : { presenter.run(item) },
                                 detailAction: item.detailHandler == nil
                                     ? nil : { presenter.runDetail(item) })
-                        .id(index)
-                        .focused($focusedItem, equals: index)
-                        .overlay {
-                            if presenter.keyboardNavigation, focusedItem == index {
-                                RoundedRectangle(cornerRadius: 5)
-                                    .stroke(Theme.accent, lineWidth: 2)
-                                    .allowsHitTesting(false)
-                            }
-                        }
                         .transition(.fadeIn)
                 case .searchable(let searchable):
                     SearchableMenuItemsView(searchable: searchable,
@@ -483,41 +456,6 @@ struct ContextMenuHost: View {
             }
         }
         .padding(.vertical, 6)
-        .onAppear {
-            if presenter.keyboardNavigation { focusedItem = keyboardItems.first }
-        }
-        .onKeyPress(.downArrow) { moveFocus(by: 1) }
-        .onKeyPress(.upArrow) { moveFocus(by: -1) }
-        .onKeyPress(.tab, phases: .down) { press in
-            moveFocus(by: press.modifiers.contains(.shift) ? -1 : 1)
-        }
-        .onKeyPress(.return) {
-            guard presenter.keyboardNavigation, let focusedItem,
-                  presenter.entries.indices.contains(focusedItem),
-                  case .item(let item) = presenter.entries[focusedItem] else { return .ignored }
-            presenter.run(item)
-            return .handled
-        }
-        .onKeyPress(.escape) {
-            guard presenter.keyboardNavigation else { return .ignored }
-            presenter.dismiss()
-            return .handled
-        }
-    }
-
-    private var keyboardItems: [Int] {
-        presenter.entries.indices.filter { index in
-            if case .item(let item) = presenter.entries[index] { return item.handler != nil }
-            return false
-        }
-    }
-
-    private func moveFocus(by offset: Int) -> KeyPress.Result {
-        guard presenter.keyboardNavigation, !keyboardItems.isEmpty else { return .ignored }
-        let items = keyboardItems
-        let current = focusedItem.flatMap { items.firstIndex(of: $0) } ?? 0
-        focusedItem = items[(current + offset + items.count) % items.count]
-        return .handled
     }
 
     // A menu near an edge stays attached to its control when it has one. A right-click
