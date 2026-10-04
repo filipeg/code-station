@@ -179,7 +179,7 @@ struct AppSidebar: View {
     }
 
     private var sessionNotices: [NoticedSession] {
-        SidebarNotices.all(store: store, runner: runner, activity: activity)
+        SidebarNotices.all(store: store, runner: runner)
     }
 
     private var sessionNoticeMenu: [MenuEntry] {
@@ -251,8 +251,7 @@ struct AppSidebar: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 16)
             } else {
-                // Grouped once per redraw: every row below reads from this, and a
-                // streaming reply redraws the rail on every token.
+                // Grouped once per redraw, since every row below reads from this.
                 let grouped = groupedSessions
                 let workspaceGroups = groupedWorkspaceSessions
                 ScrollViewReader { scroller in
@@ -260,8 +259,7 @@ struct AppSidebar: View {
                         // Lazy so the rail costs what is on screen rather than what the
                         // app holds. Every card carries a hint, a menu and hover of its
                         // own, and off-screen ones would still be built and laid out on
-                        // each redraw - a streaming reply redraws the rail on every token.
-                        // That only holds while each card is a row of the stack itself:
+                        // each redraw. That only holds while each card is a row of the stack itself:
                         // a card wrapped in a container is built along with all the rest.
                         LazyVStack(alignment: .leading, spacing: Self.listSpacing) {
                             ForEach(sections) { section in
@@ -586,7 +584,9 @@ struct AppSidebar: View {
                             waitingSince: runner.waitingSince(live.id),
                             needsInput: runner.question(live.id) != nil,
                             finished: store.hasFinished(session.id),
-                            activity: activity(live),
+                            activity: { [runner, store] in
+                                Self.activity(live, runner: runner, store: store)
+                            },
                             branch: branch(session),
                             uncommitted: uncommitted(session),
                             connected: mobileAccess.isConnected(session: session.id),
@@ -976,7 +976,8 @@ struct AppSidebar: View {
     // else reads from the saved summary, so the rail never observes transcript writes.
     // A pending permission is left out: a session waiting on one is already on the
     // needs-you card above.
-    private func activity(_ session: ChatSession) -> String? {
+    private static func activity(_ session: ChatSession, runner: SessionRunner,
+                                 store: ProjectStore) -> String? {
         let runningTool = runner.state(session.id).isBusy ? runner.runningTool(session.id) : nil
         let tasks = runner.backgroundTasks(session.id)
         // A card with nothing to say draws no line, where a wider row would say so in words.
@@ -1792,7 +1793,10 @@ private struct SessionCard: View {
     let waitingSince: Date?
     let needsInput: Bool
     let finished: Bool
-    let activity: String?
+    // Worked out inside the card rather than handed in, because it reads the tool the
+    // session is running. A tool starts and ends many times a turn, and only this card
+    // has to be redrawn for it, not the whole rail.
+    let activity: () -> String?
     let branch: String?
     let uncommitted: Bool
     let connected: Bool
@@ -1936,7 +1940,7 @@ private struct SessionCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                ActivityLine(activity: activity)
+                ActivityLine(activity: activity())
             }
             .padding(.horizontal, 10)
             .padding(.top, band == nil ? 5 : 7)

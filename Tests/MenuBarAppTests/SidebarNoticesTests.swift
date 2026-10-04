@@ -35,8 +35,7 @@ struct SidebarNoticesTests {
     // A permission prompt names the tool, since that is what the answer is about.
     @Test func aPermissionNamesTheToolInLowerCase() {
         let reason = SidebarNotices.reason(
-            .needsInput, question: request(toolName: "Bash", title: "Run a command"),
-            activity: nil)
+            .needsInput, question: request(toolName: "Bash", title: "Run a command"))
 
         #expect(reason == "permission · bash")
     }
@@ -49,8 +48,7 @@ struct SidebarNoticesTests {
         let reason = SidebarNotices.reason(
             .needsInput,
             question: request(toolName: "AskUserQuestion", title: "Which Database?",
-                              questions: [question]),
-            activity: nil)
+                              questions: [question]))
 
         #expect(reason == "question · which database?")
     }
@@ -58,22 +56,16 @@ struct SidebarNoticesTests {
     // The notice can outlive the request that caused it, and a row with no words under
     // its title would read as though nothing were wrong.
     @Test func somethingWaitingWithNoRequestStillSaysSo() {
-        #expect(SidebarNotices.reason(.needsInput, question: nil, activity: nil)
+        #expect(SidebarNotices.reason(.needsInput, question: nil)
             == "waiting on an answer")
     }
 
-    @Test func aRunningSessionBorrowsItsCardsActivityLine() {
-        #expect(SidebarNotices.reason(.running, question: nil, activity: "editing Theme.swift")
-            == "editing Theme.swift")
-    }
-
-    // A run with nothing to say still has to say something.
-    @Test func aRunningSessionWithNothingToSayStillSaysItIsRunning() {
-        #expect(SidebarNotices.reason(.running, question: nil, activity: nil) == "running")
+    @Test func aRunningSessionSaysItIsRunning() {
+        #expect(SidebarNotices.reason(.running, question: nil) == "running")
     }
 
     @Test func aFinishedTurnSaysItEndedWhileAway() {
-        #expect(SidebarNotices.reason(.finished, question: nil, activity: nil)
+        #expect(SidebarNotices.reason(.finished, question: nil)
             == "finished while away")
     }
 

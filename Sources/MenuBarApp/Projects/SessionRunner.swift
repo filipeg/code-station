@@ -41,7 +41,12 @@ final class SessionRunner {
     // session is one delete and nothing is left behind. Most of it outlives any single
     // turn: the queue, what the last turn left to pick up, which nudge was waved away. The
     // turn itself and what it is doing right now are cleared when it ends.
-    private struct SessionRecord {
+    //
+    // Observed one session and one field at a time. A tool call starting in one session
+    // then redraws only what shows that session's tools, rather than every row that reads
+    // the state of any session at all.
+    @Observable
+    fileprivate final class SessionRecord {
         var state: SessionState = .idle
         var turn: Turn?
         // Which avatar the next turn wears. Each turn takes the next number in order.
@@ -92,10 +97,21 @@ final class SessionRunner {
     }
 
     private var records: [UUID: SessionRecord] = [:]
+
+    // A record is a class, so `records[id, default: SessionRecord()].x = y` would set `x`
+    // on a fresh record and throw it away. A write that may be the session's first goes
+    // through here instead.
+    private func recordAddingIfMissing(_ sessionID: UUID) -> SessionRecord {
+        if let record = records[sessionID] { return record }
+        let record = SessionRecord()
+        records[sessionID] = record
+        return record
+    }
+
     // What is half-written in the composer and not sent yet. The detail pane is built
     // again from nothing every time another session is picked, so this cannot live there
     // without the words going with it. Kept apart from the record because it changes on
-    // every keystroke, and a change to the record redraws every row that watches a session.
+    // every keystroke, and nothing that watches the session's work needs to hear of it.
     private var drafts: [UUID: Draft] = [:]
     // What the Troubleshoot tab has been given and has not sent yet. The pane keeps only
     // the tab that is open, so a look at Chat and back would take the words with it.
@@ -126,8 +142,8 @@ final class SessionRunner {
     // is called stuck. Longer than the stall threshold because a wait is legitimately
     // quiet: the turn has answered, and a build or a test run owes nothing until it ends.
     @ObservationIgnored private let waitingStaleAfter: TimeInterval
-    // Kept out of the record so arming the timer does not redraw every row watching the
-    // session, the same reason the Codex context refreshes are held apart.
+    // Nothing on screen shows the timer, so it is kept out of the record and unobserved,
+    // the same as the Codex context refreshes.
     @ObservationIgnored private var waitWatchdogs: [UUID: Task<Void, Never>] = [:]
     // The suggestion run each session is waiting on. An answer for a run that is no
     // longer the current one is dropped, the way a model catalog read is.
@@ -319,7 +335,7 @@ final class SessionRunner {
 
     private func setState(_ state: SessionState, for sessionID: UUID) {
         guard self.state(sessionID) != state else { return }
-        records[sessionID, default: SessionRecord()].state = state
+        recordAddingIfMissing(sessionID).state = state
     }
 
     // When this session last heard anything at all from the CLI. A turn that is working
@@ -456,7 +472,7 @@ final class SessionRunner {
     }
 
     // A turn that has answered and is being held open for the tasks it started.
-    private struct Wait {
+    fileprivate struct Wait {
         var tasks: [BackgroundTask]
         // When the answer landed. The turn's own start says nothing about this: most of a
         // held-open turn can be work, or none of it can.
@@ -615,7 +631,7 @@ final class SessionRunner {
     private func preserveDraft(at index: Int, sessionID: UUID) {
         let current = draft(sessionID)
         guard !current.isEmpty else { return }
-        records[sessionID, default: SessionRecord()].queue.insert(
+        recordAddingIfMissing(sessionID).queue.insert(
             QueuedPrompt(text: current.text.trimmed,
                          attachments: current.attachments,
                          customInstructions: current.customInstructions),
@@ -736,7 +752,7 @@ final class SessionRunner {
     // had got to, which can be half way through a job worth finishing; nothing went
     // wrong, so the work is left unfinished rather than failed and is picked up on the
     // same terms. A stalled turn is retried by the app itself rather than offered.
-    private enum ResumeReason {
+    fileprivate enum ResumeReason {
         case failedTurn, stoppedTurn, stalledTurn
 
         // A failed turn is offered from the failure it shows; a stopped one from any
@@ -806,7 +822,7 @@ final class SessionRunner {
     // Recovery goes through the normal queue so it gets the same ownership and process
     // checks as a prompt typed by hand.
     private func resume(_ sessionID: UUID, after reason: ResumeReason, store: ProjectStore) {
-        records[sessionID, default: SessionRecord()].continuable = nil
+        recordAddingIfMissing(sessionID).continuable = nil
         store.markSessionSeen(sessionID)
         store.append(ChatMessage(role: .system, text: reason.note), to: sessionID)
         records[sessionID]?.queue.insert(
@@ -995,7 +1011,7 @@ final class SessionRunner {
         // A turn that says nothing for the best part of a minute needs to say why.
         let notice = ChatMessage(role: .system, text: "Compacting the context…")
         store.append(notice, to: sessionID)
-        records[sessionID, default: SessionRecord()].compactNoticeID = notice.id
+        recordAddingIfMissing(sessionID).compactNoticeID = notice.id
         records[sessionID]?.nudgeDismissed = false
         records[sessionID]?.queue.append(
             QueuedPrompt(text: "/compact", attachments: [], customInstructions: nil,
@@ -1129,7 +1145,7 @@ final class SessionRunner {
         }
         let mode: SummaryMode = session.agent == .claudeCode ? .claudeRecap : .promptRecap
         let prompt = mode == .claudeRecap ? "/recap" : Self.recapPrompt
-        records[sessionID, default: SessionRecord()].queue.append(QueuedPrompt(
+        recordAddingIfMissing(sessionID).queue.append(QueuedPrompt(
             text: prompt,
             attachments: [],
             customInstructions: nil,
@@ -1181,7 +1197,7 @@ final class SessionRunner {
         } else {
             .idle
         }
-        records[conversationID, default: SessionRecord()].queue.append(QueuedPrompt(
+        recordAddingIfMissing(conversationID).queue.append(QueuedPrompt(
             text: SessionTitle.prompt, attachments: [], customInstructions: nil,
             isAppCommand: true,
             summary: SummaryAttempt(mode: .title(SessionTitleRequest(session)),
@@ -1209,7 +1225,7 @@ final class SessionRunner {
             AppNotifier.shared.turnEnded(sessionID: session.id,
                                          sessionTitle: session.title, failure: nil)
         }
-        records[sessionID, default: SessionRecord()].queue.insert(QueuedPrompt(
+        recordAddingIfMissing(sessionID).queue.insert(QueuedPrompt(
             text: SessionTitle.prompt, attachments: [], customInstructions: nil,
             isAppCommand: true,
             summary: SummaryAttempt(mode: .title(SessionTitleRequest(session)),
@@ -1230,7 +1246,7 @@ final class SessionRunner {
     // Only until the window is dealt with. Clearing and compacting both take the nudge
     // away on their own, so a dismissal that outlived them would hide the next one too.
     func dismissNudge(_ sessionID: UUID) {
-        records[sessionID, default: SessionRecord()].nudgeDismissed = true
+        recordAddingIfMissing(sessionID).nudgeDismissed = true
     }
 
     // Nothing is ever sent straight to the CLI: a prompt joins the queue and the queue is
@@ -1261,7 +1277,7 @@ final class SessionRunner {
                     || instructions?.isEmpty == false else { return }
             text = planPrompt
         }
-        records[sessionID, default: SessionRecord()].queue.append(QueuedPrompt(
+        recordAddingIfMissing(sessionID).queue.append(QueuedPrompt(
             text: text,
             attachments: attachments,
             customInstructions: instructions?.isEmpty == false ? instructions : nil,
@@ -1273,7 +1289,7 @@ final class SessionRunner {
                         sessionID: UUID, store: ProjectStore) {
         guard !isBeingRemoved(sessionID), store.session(sessionID) != nil else { return }
         store.markSessionSeen(sessionID)
-        records[sessionID, default: SessionRecord()].queue.append(QueuedPrompt(
+        recordAddingIfMissing(sessionID).queue.append(QueuedPrompt(
             text: prompt,
             attachments: attachments,
             customInstructions: nil,
@@ -1342,7 +1358,7 @@ final class SessionRunner {
 
     private func nextAvatarSequence(for sessionID: UUID) -> Int {
         let next = records[sessionID]?.nextAvatarSequence ?? 0
-        records[sessionID, default: SessionRecord()].nextAvatarSequence = next + 1
+        recordAddingIfMissing(sessionID).nextAvatarSequence = next + 1
         return next
     }
 
@@ -1766,7 +1782,7 @@ final class SessionRunner {
 
     func beginRemoval(_ sessionID: UUID) -> Bool {
         guard !state(sessionID).isBusy, !isBeingRemoved(sessionID) else { return false }
-        records[sessionID, default: SessionRecord()].isBeingRemoved = true
+        recordAddingIfMissing(sessionID).isBeingRemoved = true
         return true
     }
 
@@ -1792,7 +1808,7 @@ final class SessionRunner {
             ChatMessage(role: .system, text: "Stopped. The turn ended before it finished."),
             to: sessionID)
         if store.session(sessionID)?.hasAgentConversation == true {
-            records[sessionID, default: SessionRecord()].continuable = .stoppedTurn
+            recordAddingIfMissing(sessionID).continuable = .stoppedTurn
         }
     }
 
@@ -1923,7 +1939,7 @@ final class SessionRunner {
         }
 
         turn.isFirstTurn = isFirstTurn
-        records[sessionID, default: SessionRecord()].turn = turn
+        recordAddingIfMissing(sessionID).turn = turn
         if let presetSessionID = plan.presetSessionID {
             turn.agentSessionID = presetSessionID
             store.setAgentSessionID(presetSessionID, agent: agent, for: sessionID)
@@ -3214,7 +3230,7 @@ final class SessionRunner {
         }
 
         if attempt.mode == .claudeRecap, !turn.stopRequested {
-            records[sessionID, default: SessionRecord()].queue.insert(QueuedPrompt(
+            recordAddingIfMissing(sessionID).queue.insert(QueuedPrompt(
                 text: Self.recapPrompt,
                 attachments: [],
                 customInstructions: nil,
@@ -3260,7 +3276,7 @@ final class SessionRunner {
     }
 
     // One live turn. Only ever touched on the main actor.
-    private final class Turn {
+    fileprivate final class Turn {
         let token = UUID()
         let processGroup: pid_t
         // The agent this turn started on. The app-wide choice can move mid-turn, and

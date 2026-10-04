@@ -14,10 +14,10 @@ struct NoticedSession {
 
 @MainActor
 enum SidebarNotices {
-    // The activity line is handed in because the session cards work one out too, and a
-    // running notice says the same thing the card would.
-    static func all(store: ProjectStore, runner: SessionRunner,
-                    activity: (ChatSession) -> String?) -> [NoticedSession] {
+    // Reads each session's state but never the tool it is running. A tool starts and
+    // ends many times a turn, and this list is built with the whole rail, so reading it
+    // here would redraw the rail on every call.
+    static func all(store: ProjectStore, runner: SessionRunner) -> [NoticedSession] {
         store.sidebarSessions.compactMap { session in
             guard let project = store.project(session.projectID) else { return nil }
             let live = LiveConversation.id(of: session.id, store: store, runner: runner)
@@ -27,8 +27,7 @@ enum SidebarNotices {
                 needsInput: question != nil,
                 finishedUnseen: store.hasFinished(session.id)) else { return nil }
             return NoticedSession(session: session, project: project, notice: notice,
-                                  reason: reason(notice, question: question,
-                                                 activity: activity(session)))
+                                  reason: reason(notice, question: question))
         }
         .sorted(by: comesFirst)
     }
@@ -41,8 +40,7 @@ enum SidebarNotices {
         return first.session.lastActivity > second.session.lastActivity
     }
 
-    static func reason(_ notice: SessionNotice, question: PermissionRequest?,
-                       activity: String?) -> String {
+    static func reason(_ notice: SessionNotice, question: PermissionRequest?) -> String {
         switch notice {
         case .needsInput:
             guard let question else { return "waiting on an answer" }
@@ -50,7 +48,7 @@ enum SidebarNotices {
                 ? "question · \(question.title.lowercased())"
                 : "permission · \(question.toolName.lowercased())"
         case .running:
-            return activity ?? "running"
+            return "running"
         case .finished:
             return "finished while away"
         }
