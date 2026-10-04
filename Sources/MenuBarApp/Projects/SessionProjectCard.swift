@@ -86,21 +86,25 @@ struct SessionCheckoutPaths: View {
             }
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
-                ForEach(entries.indices, id: \.self) { index in
-                    let entry = entries[index]
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let branch = entry.branch {
-                            Text("\(entry.name): \(branch)")
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(entries.indices, id: \.self) { index in
+                        let entry = entries[index]
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let branch = entry.branch {
+                                Text("\(entry.name): \(branch)")
+                            }
+                            Text(entry.path)
                         }
-                        Text(entry.path)
+                        .font(.mono(11.5))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
-                    .font(.mono(11.5))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
+                .transition(.fold)
             }
         }
         .foregroundStyle(.secondary)
+        .smoothlyResizes(when: expanded)
     }
 }
 

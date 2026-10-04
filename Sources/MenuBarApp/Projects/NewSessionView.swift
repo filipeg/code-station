@@ -266,18 +266,22 @@ struct FreshnessNotice: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if expanded {
-                    if forWorktree, let remote = report.remoteRef {
-                        choice(.remote,
-                               title: "Start from \(remote)",
-                               detail: remoteDetail)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if forWorktree, let remote = report.remoteRef {
+                            choice(.remote,
+                                   title: "Start from \(remote)",
+                                   detail: remoteDetail)
+                        }
+                        if report.canUpdateCheckout, let title = updateTitle {
+                            choice(.updateCheckout, title: title, detail: updateDetail)
+                        }
+                        choice(.currentCheckout, title: currentTitle, detail: currentDetail)
                     }
-                    if report.canUpdateCheckout, let title = updateTitle {
-                        choice(.updateCheckout, title: title, detail: updateDetail)
-                    }
-                    choice(.currentCheckout, title: currentTitle, detail: currentDetail)
+                    .transition(.fold)
                 }
             }
         }
+        .smoothlyResizes(when: expanded)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Theme.sunken)
