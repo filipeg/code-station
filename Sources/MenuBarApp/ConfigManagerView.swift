@@ -11,7 +11,7 @@ struct ConfigManagerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var addingPresetGroup: SiteDefaults.MCP.PresetGroup?
     @State private var showingAddJSON = false
-    @State private var grafanaExpanded = true
+    @State private var grafanaExpanded = false
     @State private var expandedAgents: Set<AgentConfiguredServer.Source> = []
     // A server two agents hold has a row under each, so the pick names the agent too.
     @State private var selectedAgentConfigured: AgentConfiguredSelection?
@@ -49,7 +49,10 @@ struct ConfigManagerView: View {
         .sheet(isPresented: $showingAddJSON) { AddJSONServerView() }
         .onAppear { refreshIntegrations() }
         .onChange(of: filter) {
-            if !filter.isBlank { expandedAgents = Set(AgentConfiguredServer.Source.allCases) }
+            if !filter.isBlank {
+                grafanaExpanded = true
+                expandedAgents = Set(AgentConfiguredServer.Source.allCases)
+            }
         }
         .onChange(of: agentConfiguredServers.map(\.name)) {
             guard let selectedAgentConfigured,
@@ -130,7 +133,7 @@ struct ConfigManagerView: View {
                             total: grafanaServers.count,
                             expanded: $grafanaExpanded,
                             toggleAll: toggleAllGrafana)
-                        if grafanaExpanded {
+                        if grafanaExpanded || !filter.isBlank {
                             VStack(spacing: 4) {
                                 ForEach(grafanaServers) { row(for: $0) }
                             }
@@ -459,6 +462,9 @@ private struct GrafanaGroupHeader: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Image(systemName: "chart.xyaxis.line")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary)
                     Text("GRAFANA")
                         .font(.system(size: 11, weight: .semibold))
                         .kerning(0.6)
