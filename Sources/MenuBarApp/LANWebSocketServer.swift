@@ -99,6 +99,11 @@ struct WebSocketFrameDecoder {
     }
 }
 
+struct LANResource: Sendable {
+    let data: Data
+    let contentType: String
+}
+
 final class LANWebSocketServer: @unchecked Sendable {
     typealias ConnectionID = UUID
 
@@ -148,15 +153,18 @@ final class LANWebSocketServer: @unchecked Sendable {
     private let page: Data
     private let onOpen: @Sendable (ConnectionID, String) -> Void
     private let onMessage: @Sendable (ConnectionID, String) -> Void
+    private let resource: @Sendable (String) async -> LANResource?
     private let onClose: @Sendable (ConnectionID) -> Void
     private let listener = HTTPListener()
     private var clients: [ConnectionID: Client] = [:]
 
     init(page: Data,
+         resource: @escaping @Sendable (String) async -> LANResource? = { _ in nil },
          onOpen: @escaping @Sendable (ConnectionID, String) -> Void,
          onMessage: @escaping @Sendable (ConnectionID, String) -> Void,
          onClose: @escaping @Sendable (ConnectionID) -> Void) {
         self.page = page
+        self.resource = resource
         self.onOpen = onOpen
         self.onMessage = onMessage
         self.onClose = onClose
@@ -256,6 +264,20 @@ final class LANWebSocketServer: @unchecked Sendable {
         guard let request = Request.parse(client.requestData) else { return }
         let path = HTTPRequestLine.path(in: request.target)
 
+        if path.hasPrefix("/design/") {
+            Task {
+                let result = await resource(path)
+                queue.async {
+                    guard self.clients[client.id] != nil else { return }
+                    self.reply(status: result == nil ? "404 Not Found" : "200 OK",
+                               body: result?.data ?? Data(),
+                               contentType: result?.contentType ?? "text/plain",
+                               design: true, to: client)
+                }
+            }
+            return
+        }
+
         if path.hasPrefix("/mobile/") {
             reply(status: "200 OK", body: page, contentType: "text/html; charset=utf-8", to: client)
             return
@@ -319,14 +341,20 @@ final class LANWebSocketServer: @unchecked Sendable {
     }
 
     private func reply(status: String, body: Data, contentType: String = "text/plain; charset=utf-8",
-                       to client: Client) {
+                       design: Bool = false, to client: Client) {
+        let policy = design
+            ? "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; "
+                + "style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; "
+                + "frame-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'"
+            : "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                + "connect-src ws: wss:; frame-src 'self'; base-uri 'none'; object-src 'none'"
         let header = [
             "HTTP/1.1 \(status)",
             "Content-Type: \(contentType)",
             "Content-Length: \(body.count)",
             "Cache-Control: no-store",
-            "Content-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; "
-                + "style-src 'unsafe-inline'; connect-src ws: wss:",
+            "Content-Security-Policy: \(policy)",
+            "Referrer-Policy: no-referrer",
             "X-Content-Type-Options: nosniff",
             "Connection: close",
             "",
@@ -363,9 +391,14 @@ final class LANWebSocketServer: @unchecked Sendable {
     private func finish(_ connectionID: ConnectionID, sendClose: Bool = false) {
         guard let client = clients.removeValue(forKey: connectionID) else { return }
         if sendClose, client.upgraded {
-            sendFrame(opcode: 0x8, payload: Data(), to: client)
+            // Drain the preceding error frame before closing so terminal pairing errors
+            // reach the browser and stop its reconnect loop.
+            client.connection.send(content: Data([0x88, 0x00]), completion: .contentProcessed { _ in
+                client.connection.cancel()
+            })
+        } else {
+            client.connection.cancel()
         }
-        client.connection.cancel()
         if client.upgraded { onClose(connectionID) }
     }
 }

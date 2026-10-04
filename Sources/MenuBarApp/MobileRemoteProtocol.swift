@@ -10,13 +10,16 @@ import Foundation
 struct RemoteCommand: Decodable, Equatable {
     enum Kind: String, Decodable {
         case authenticate, openSession, closeSession, createSession, resync
-        case sendPrompt, stopTurn, answerPermission
+        case sendPrompt, stopTurn, answerPermission, openConversation
     }
 
     enum Answer: String, Decodable {
         case allowOnce, allowAlways, deny, answers
     }
 
+    enum Conversation: String, Codable { case main, design }
+
+    var conversation: Conversation?
     let type: Kind
     var version: Int?
     var secret: String?
@@ -35,6 +38,7 @@ struct RemoteDirectory: Encodable, Equatable {
     let type = "directory"
     let version = 1
     let title: String
+    let scope: String
     let canCreate: Bool
     let projects: [RemoteProject]
 }
@@ -43,6 +47,8 @@ struct RemoteProject: Encodable, Equatable {
     let id: String
     let name: String
     let path: String
+    let tint: String
+    let tintInk: String
     // Whether a session here can have a checkout of its own, which is the one choice the
     // phone offers when starting one.
     let isGit: Bool
@@ -57,6 +63,7 @@ struct RemoteSessionRow: Encodable, Equatable {
     let workspace: String?
     let branch: String?
     let state: String
+    var conversation: RemoteCommand.Conversation = .main
     let lastActivity: Date
     let added: Int
     let removed: Int
@@ -87,6 +94,8 @@ struct RemoteSnapshot: Encodable {
     // Whether there is a list to go back to, which is what puts the back arrow on the
     // header of a session opened from a project or from the whole app.
     let canBrowse: Bool
+    var conversation: RemoteCommand.Conversation = .main
+    var scope: String = "This session only"
     let header: RemoteHeader
     let messages: [RemoteMessage]
     let queued: [RemoteQueuedPrompt]
@@ -347,4 +356,45 @@ struct RemotePermission: Encodable {
 struct RemoteError: Encodable {
     let type = "error"
     let message: String
+    var code: String = "commandFailed"
+}
+
+struct RemoteDesign: Encodable, Equatable {
+    let type = "design"
+    let sessionID: String
+    let title: String
+    let revision: String
+    let hasConversation: Bool
+    let screens: [Screen]
+
+    struct Screen: Encodable, Equatable {
+        let id: String
+        let title: String
+        let url: String
+    }
+}
+
+// Only published screens and browser assets may cross the pairing boundary. Resolving
+// symlinks as well as dot segments keeps a design from exposing files outside its folder.
+enum RemoteDesignArtifacts {
+    static let contentTypes = [
+        "html": "text/html; charset=utf-8", "css": "text/css; charset=utf-8",
+        "js": "text/javascript; charset=utf-8", "png": "image/png", "jpg": "image/jpeg",
+        "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp",
+        "svg": "image/svg+xml", "woff": "font/woff", "woff2": "font/woff2",
+    ]
+
+    static func resource(_ path: String, in directory: URL) -> LANResource? {
+        let root = directory.resolvingSymlinksInPath().standardizedFileURL
+        let url = root.appendingPathComponent(path).resolvingSymlinksInPath().standardizedFileURL
+        guard !path.split(separator: "/").contains(where: { $0.hasPrefix(".") }),
+              let relative = url.path.pathRelative(to: root.path), relative == path,
+              let type = contentTypes[url.pathExtension.lowercased()],
+              let files = DesignArtifactRevision.read(root),
+              files.files.contains(where: { $0.path == path && $0.size <= 10 * 1024 * 1024 }),
+              url.pathExtension.lowercased() != "html"
+                || DesignManifest.read(from: root).screens.contains(where: { $0.path == path }),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return LANResource(data: data, contentType: type)
+    }
 }

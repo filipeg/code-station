@@ -23,6 +23,14 @@ enum MobileScope: Hashable {
 
     var canCreate: Bool { canBrowse }
 
+    var label: String {
+        switch self {
+        case .session: "This session only"
+        case .project: "This project only"
+        case .everything: "All projects shared"
+        }
+    }
+
     func allows(_ session: ChatSession) -> Bool {
         switch self {
         case .session(let id): session.id == id
@@ -172,6 +180,7 @@ final class MobileAccessController {
         // Where the phone had got to when it last dropped, so a reconnect lands back on
         // the session it was reading rather than at the top of the list.
         var openSession: UUID?
+        var conversation: RemoteCommand.Conversation = .main
     }
 
     // One connected phone: the code it came in on, what that code lets it reach, and the
@@ -180,6 +189,9 @@ final class MobileAccessController {
         let pairingID: UUID
         let scope: MobileScope
         var openSession: UUID?
+        var conversation: RemoteCommand.Conversation = .main
+        var conversationID: UUID?
+        let designToken = UUID().uuidString
     }
 
     private struct Marker: Equatable {
@@ -235,6 +247,8 @@ final class MobileAccessController {
     private var pendingConnections: [UUID: UUID] = [:]
     private var readers: [UUID: Reader] = [:]
     private var views: [UUID: RemoteView] = [:]
+    private var designs: [UUID: RemoteDesign] = [:]
+    private var lastDesignCheck = Date.distantPast
     private var lists: [UUID: RemoteDirectory] = [:]
     // Making a session can take a while when git has to lay down a worktree, and the phone
     // has no way to see that its tap landed, so a second one is refused rather than run.
@@ -355,6 +369,7 @@ final class MobileAccessController {
     // back as `closed`, which finds nothing left to do.
     private func drop(_ connectionID: UUID) {
         guard forget(connectionID) != nil else { return }
+        server?.send(Self.error("Sharing ended. Scan a fresh QR code on your Mac.", code: "pairingEnded"), to: connectionID)
         server?.close(connectionID)
     }
 
@@ -363,9 +378,10 @@ final class MobileAccessController {
     private func forget(_ connectionID: UUID) -> Reader? {
         guard let reader = readers.removeValue(forKey: connectionID) else { return nil }
         views[connectionID] = nil
+        designs[connectionID] = nil
         lists[connectionID] = nil
         creating.remove(connectionID)
-        if let open = reader.openSession { store.release(open, for: .remote) }
+        if let open = reader.conversationID ?? reader.openSession { store.release(open, for: .remote) }
         return reader
     }
 
@@ -373,6 +389,9 @@ final class MobileAccessController {
         if let port { return port }
         let created = LANWebSocketServer(
             page: MobilePage.data,
+            resource: { [weak self] path in
+                await self?.designResource(path)
+            },
             onOpen: { [weak self] connectionID, pairingID in
                 Task { @MainActor in self?.opened(connectionID, pairingID: pairingID) }
             },
@@ -396,7 +415,7 @@ final class MobileAccessController {
 
     private func opened(_ connectionID: UUID, pairingID: String) {
         guard let id = UUID(uuidString: pairingID), pairings[id] != nil else {
-            server?.send(Self.error("This QR code is no longer valid."), to: connectionID)
+            server?.send(Self.error("This QR code has expired or was revoked. Scan a fresh code on your Mac.", code: "pairingEnded"), to: connectionID)
             server?.close(connectionID)
             return
         }
@@ -419,20 +438,22 @@ final class MobileAccessController {
         switch command.type {
         case .authenticate:
             server?.send(Self.error("That mobile command is not supported."), to: connectionID)
+        case .openConversation:
+            changeConversation(command.conversation ?? .main, for: connectionID)
         case .openSession:
-            open(command.sessionID, for: connectionID)
+            open(command.sessionID, for: connectionID, conversation: command.conversation ?? .main)
         case .closeSession:
             leaveSession(connectionID)
         case .createSession:
             create(command, for: connectionID)
         case .resync:
             if let open = reader.openSession {
-                sendSnapshot(to: connectionID, sessionID: open)
+                sendSnapshot(to: connectionID, sessionID: reader.conversationID ?? open)
             } else {
                 sendDirectory(to: connectionID, force: true)
             }
         case .sendPrompt:
-            guard let sessionID = openSession(of: connectionID) else { return }
+            guard let sessionID = openSession(of: connectionID, command: command) else { return }
             let prompt = command.prompt?.trimmed ?? ""
             guard !prompt.isEmpty, prompt.count <= 100_000 else {
                 server?.send(Self.error(prompt.isEmpty ? "Write a prompt first."
@@ -442,10 +463,10 @@ final class MobileAccessController {
             }
             runner.send(prompt, sessionID: sessionID, store: store)
         case .stopTurn:
-            guard let sessionID = openSession(of: connectionID) else { return }
+            guard let sessionID = openSession(of: connectionID, command: command) else { return }
             runner.stop(sessionID)
         case .answerPermission:
-            guard let sessionID = openSession(of: connectionID) else { return }
+            guard let sessionID = openSession(of: connectionID, command: command) else { return }
             answer(command, sessionID: sessionID, connectionID: connectionID)
         }
     }
@@ -453,9 +474,14 @@ final class MobileAccessController {
     // The session a command that speaks to a session lands in. Nothing of the kind can
     // run from the list, so a phone on the list is told so, and one whose session has
     // gone is moved off it.
-    private func openSession(of connectionID: UUID) -> UUID? {
-        guard let sessionID = readers[connectionID]?.openSession else {
+    private func openSession(of connectionID: UUID, command: RemoteCommand) -> UUID? {
+        guard let reader = readers[connectionID], let sessionID = reader.conversationID ?? reader.openSession else {
             server?.send(Self.error("Open a session first."), to: connectionID)
+            return nil
+        }
+        guard command.conversation ?? .main == reader.conversation,
+              command.sessionID == nil || command.sessionID == reader.openSession?.uuidString else {
+            server?.send(Self.error("The conversation changed. Try again."), to: connectionID)
             return nil
         }
         guard store.session(sessionID) != nil else {
@@ -472,14 +498,14 @@ final class MobileAccessController {
               var pairing = pairings[pairingID],
               let secret = command.secret,
               Self.securelyEqual(secret, pairing.secret) else {
-            server?.send(Self.error("This QR code is not valid."), to: connectionID)
+            server?.send(Self.error("This QR code is not valid. Scan a fresh code on your Mac.", code: "pairingEnded"), to: connectionID)
             server?.close(connectionID)
             return
         }
 
         let scope = pairing.share.scope
         if let gone = missing(scope) {
-            server?.send(Self.error(gone), to: connectionID)
+            server?.send(Self.error(gone, code: "pairingEnded"), to: connectionID)
             server?.close(connectionID)
             revoke(scope)
             return
@@ -499,7 +525,9 @@ final class MobileAccessController {
         // put back where it was rather than at the top of the list.
         let resume: UUID? = if case .session(let id) = scope { id } else { pairing.openSession }
         if let resume, let session = store.session(resume), scope.allows(session) {
-            open(resume.uuidString, for: connectionID)
+            let conversation = pairing.conversation == .design && store.designConversation(for: resume) != nil
+                ? RemoteCommand.Conversation.design : .main
+            open(resume.uuidString, for: connectionID, conversation: conversation)
         } else {
             sendDirectory(to: connectionID, force: true)
         }
@@ -559,6 +587,7 @@ final class MobileAccessController {
         if var pairing = pairings[reader.pairingID], pairing.share.connectionID == connectionID {
             pairing.share.connectionID = nil
             pairing.openSession = reader.openSession
+            pairing.conversation = reader.conversation
             pairings[reader.pairingID] = pairing
             scheduleExpiry(for: reader.pairingID)
         }
@@ -567,7 +596,8 @@ final class MobileAccessController {
 
     // MARK: - Moving between sessions
 
-    private func open(_ sessionID: String?, for connectionID: UUID) {
+    private func open(_ sessionID: String?, for connectionID: UUID,
+                      conversation: RemoteCommand.Conversation = .main) {
         guard var reader = readers[connectionID] else { return }
         guard let id = sessionID.flatMap(UUID.init(uuidString:)),
               let session = store.session(id),
@@ -576,28 +606,39 @@ final class MobileAccessController {
                          to: connectionID)
             return
         }
-        guard reader.openSession != id else {
-            sendSnapshot(to: connectionID, sessionID: id)
+        let target = conversation == .main ? session : store.designConversation(for: id)
+        guard let target else {
+            server?.send(Self.error("There is no Design conversation for this session."), to: connectionID)
+            return
+        }
+        guard reader.openSession != id || reader.conversationID != target.id else {
+            sendSnapshot(to: connectionID, sessionID: target.id)
             return
         }
 
         // The transcript is only kept in memory while something is reading it, so the hold
         // moves with the phone rather than piling up one session at a time.
-        if let previous = reader.openSession { store.release(previous, for: .remote) }
-        store.hold(id, for: .remote)
+        if let previous = reader.conversationID ?? reader.openSession { store.release(previous, for: .remote) }
+        store.hold(target.id, for: .remote)
         reader.openSession = id
+        reader.conversation = conversation
+        reader.conversationID = target.id
         readers[connectionID] = reader
         pairings[reader.pairingID]?.openSession = id
+        pairings[reader.pairingID]?.conversation = conversation
         views[connectionID] = nil
         lists[connectionID] = nil
-        sendSnapshot(to: connectionID, sessionID: id)
+        sendSnapshot(to: connectionID, sessionID: target.id)
     }
 
     private func leaveSession(_ connectionID: UUID, because message: String? = nil) {
         guard var reader = readers[connectionID], reader.scope.canBrowse else { return }
         if let message { server?.send(Self.error(message), to: connectionID) }
-        if let open = reader.openSession { store.release(open, for: .remote) }
+        if let open = reader.conversationID ?? reader.openSession { store.release(open, for: .remote) }
         reader.openSession = nil
+        reader.conversationID = nil
+        reader.conversation = .main
+        designs[connectionID] = nil
         readers[connectionID] = reader
         pairings[reader.pairingID]?.openSession = nil
         views[connectionID] = nil
@@ -713,12 +754,16 @@ final class MobileAccessController {
     }
 
     private func refreshConnections() {
+        let checkDesign = Date().timeIntervalSince(lastDesignCheck) >= 1
+        if checkDesign { lastDesignCheck = Date() }
         for (connectionID, reader) in readers {
-            guard let sessionID = reader.openSession else {
+            if checkDesign { sendDesign(to: connectionID) }
+            guard let sessionID = reader.conversationID ?? reader.openSession else {
                 sendDirectory(to: connectionID, force: false)
                 continue
             }
-            guard store.session(sessionID) != nil else {
+            guard let mainID = reader.openSession, let main = store.session(mainID),
+                  reader.scope.allows(main), store.session(sessionID) != nil else {
                 sessionVanished(connectionID)
                 continue
             }
@@ -737,7 +782,7 @@ final class MobileAccessController {
                       project: session.flatMap { store.project($0.projectID)?.name } ?? "",
                       agent: session?.agent.title ?? "",
                       branch: tree.branch ?? "",
-                      state: SessionTone(sessionID, store: store, runner: runner).word,
+                      state: conversationTone(sessionID).word,
                       failure: Self.failure(runner.state(sessionID)) ?? "",
                       added: tree.added,
                       removed: tree.removed,
@@ -797,11 +842,14 @@ final class MobileAccessController {
 
         return RemoteDirectory(
             title: title(for: scope),
+            scope: scope.label,
             canCreate: scope.canCreate,
             projects: ordered.map { project in
                 RemoteProject(id: project.id.uuidString,
                               name: project.name,
                               path: project.collapsedPath,
+                              tint: Self.projectTint(project.name),
+                              tintInk: Self.projectTint(project.name, ink: true),
                               isGit: project.isGitRepository,
                               isMissing: store.isMissing(project),
                               sessions: rows[project.id] ?? [])
@@ -817,6 +865,7 @@ final class MobileAccessController {
             branch: session.worktreeBranch
                 ?? session.sessionProjects?.compactMap(\.worktreeBranch).first,
             state: SessionTone(session.id, store: store, runner: runner).word,
+            conversation: LiveConversation.id(of: session.id, store: store, runner: runner) == session.id ? .main : .design,
             lastActivity: session.lastActivity,
             added: session.summary.added,
             removed: session.summary.removed)
@@ -832,6 +881,13 @@ final class MobileAccessController {
 
     // MARK: - The session
 
+    private func conversationTone(_ sessionID: UUID) -> SessionTone {
+        let state = runner.state(sessionID)
+        return SessionTone(busy: state.isBusy, needsInput: runner.question(sessionID) != nil,
+                           finished: store.hasFinished(sessionID), waiting: state == .waiting,
+                           waitIsStale: runner.waitIsStale(sessionID))
+    }
+
     private func remoteState(_ sessionID: UUID) -> RemoteState? {
         guard let session = store.session(sessionID),
               let project = store.project(session.projectID) else { return nil }
@@ -841,7 +897,7 @@ final class MobileAccessController {
             .map { RemoteMessage($0, projectPath: projectPath) }
         let queued = runner.queued(sessionID)
         let state = runner.state(sessionID)
-        let tone = SessionTone(sessionID, store: store, runner: runner)
+        let tone = conversationTone(sessionID)
         let tree = workingTree(session)
         return RemoteState(
             header: RemoteHeader(
@@ -868,14 +924,16 @@ final class MobileAccessController {
                                 uniquingKeysWith: { first, _ in first }),
             queued: queued.map(RemoteQueuedPrompt.init),
             permission: runner.question(sessionID).map {
-                RemotePermission($0, runsIn: tree.branch ?? project.name)
+                RemotePermission($0, runsIn: [project.name, tree.branch].compactMap { $0 }.joined(separator: " / "))
             })
     }
 
     private func sendSnapshot(to connectionID: UUID, sessionID: UUID) {
         guard let reader = readers[connectionID], let state = remoteState(sessionID) else { return }
-        let snapshot = RemoteSnapshot(sessionID: sessionID.uuidString,
+        let snapshot = RemoteSnapshot(sessionID: (reader.openSession ?? sessionID).uuidString,
                                       canBrowse: reader.scope.canBrowse,
+                                      conversation: reader.conversation,
+                                      scope: reader.scope.label,
                                       header: state.header,
                                       messages: state.messages,
                                       queued: state.queued,
@@ -883,6 +941,7 @@ final class MobileAccessController {
         guard let text = Self.encode(snapshot) else { return }
         remember(state, for: connectionID, sessionID: sessionID)
         server?.send(text, to: connectionID)
+        sendDesign(to: connectionID)
     }
 
     private func sendUpdate(to connectionID: UUID, sessionID: UUID) {
@@ -965,8 +1024,64 @@ final class MobileAccessController {
         return zip(left, right).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 
-    private static func error(_ message: String) -> String {
-        let data = try? JSONEncoder().encode(RemoteError(message: message))
+    private static func projectTint(_ name: String, ink: Bool = false) -> String {
+        let tint = Theme.projectTint(for: name)
+        var color = NSColor.gray
+        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+            color = NSColor(ink ? tint.ink : tint.colour).usingColorSpace(.sRGB) ?? .gray
+        }
+        return String(format: "#%02X%02X%02X", Int(color.redComponent * 255),
+                      Int(color.greenComponent * 255), Int(color.blueComponent * 255))
+    }
+
+    private func changeConversation(_ conversation: RemoteCommand.Conversation, for connectionID: UUID) {
+        guard let mainID = readers[connectionID]?.openSession else { return }
+        open(mainID.uuidString, for: connectionID, conversation: conversation)
+    }
+
+    private func designDirectory(for reader: Reader) -> URL? {
+        guard let id = reader.openSession, let session = store.session(id),
+              reader.scope.allows(session) else { return nil }
+        if let reference = store.implementationDesignDirectory(for: session) { return reference }
+        guard let owner = store.designOwner(for: session) else { return nil }
+        return store.designDirectory(for: owner)
+    }
+
+    private func designResource(_ path: String) -> LANResource? {
+        let parts = path.split(separator: "/", maxSplits: 2).map(String.init)
+        guard parts.count == 3, parts[0] == "design",
+              let reader = readers.values.first(where: { $0.designToken == parts[1] }),
+              let directory = designDirectory(for: reader) else { return nil }
+        return RemoteDesignArtifacts.resource(parts[2], in: directory)
+    }
+
+    private func sendDesign(to connectionID: UUID) {
+        guard let reader = readers[connectionID], let id = reader.openSession else { return }
+        let directory = designDirectory(for: reader)
+        let revision = directory.flatMap(DesignArtifactRevision.read)
+        let screens = directory.map { directory in
+            DesignManifest.read(from: directory).screens.compactMap { screen -> RemoteDesign.Screen? in
+                guard DesignManifest.safeURL(for: screen, in: directory) != nil else { return nil }
+                var allowed = CharacterSet.urlPathAllowed
+                allowed.remove(charactersIn: "?#%")
+                guard let path = screen.path.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+                return .init(id: screen.id, title: screen.title,
+                             url: "/design/\(reader.designToken)/\(path)")
+            }
+        } ?? []
+        let stamp = revision?.files.map { "\($0.path):\($0.modified.timeIntervalSince1970):\($0.size)" }
+            .joined(separator: "|") ?? ""
+        let design = RemoteDesign(sessionID: id.uuidString, title: "Design preview",
+                                  revision: String(StableHash.fnv1a(stamp), radix: 16),
+                                  hasConversation: store.designConversation(for: id) != nil,
+                                  screens: screens)
+        guard designs[connectionID] != design else { return }
+        designs[connectionID] = design
+        if let text = Self.encode(design) { server?.send(text, to: connectionID) }
+    }
+
+    private static func error(_ message: String, code: String = "commandFailed") -> String {
+        let data = try? JSONEncoder().encode(RemoteError(message: message, code: code))
         return data.flatMap { String(data: $0, encoding: .utf8) }
             ?? #"{"type":"error","message":"Mobile access failed."}"#
     }
