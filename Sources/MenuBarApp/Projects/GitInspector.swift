@@ -75,6 +75,7 @@ struct GitSnapshot: Sendable, Equatable {
     var remoteBranches: [RemoteBranch] = []
     // The remote branch this one tracks, and how the two have drifted apart.
     var upstream: String?
+    var trackingKnown = false
     var ahead: Int = 0
     var behind: Int = 0
     // The subject of the newest commit and when it landed, which is what says whether the
@@ -85,6 +86,14 @@ struct GitSnapshot: Sendable, Equatable {
 
     var totalAdded: Int { files.compactMap(\.added).reduce(0, +) }
     var totalRemoved: Int { files.compactMap(\.removed).reduce(0, +) }
+
+    func syncDescription(remoteUnavailable: Bool = false) -> String {
+        if remoteUnavailable { return "Remote status unavailable" }
+        guard let upstream else { return "No upstream branch" }
+        guard trackingKnown else { return "Remote status unknown" }
+        if ahead > 0 || behind > 0 { return "\(ahead) ahead · \(behind) behind \(upstream)" }
+        return "Up to date with \(upstream) (last fetched)"
+    }
 
     static func state(_ state: GitRepoState) -> GitSnapshot { GitSnapshot(state: state) }
 }
@@ -214,14 +223,14 @@ enum GitInspector {
     // MARK: - Snapshot
 
     static func snapshot(at path: String, commandTimeout: TimeInterval? = nil,
-                         lane: Lane = .background) async -> GitSnapshot {
+                         lane: Lane = .background, comparingToLastCommit: Bool = false) async -> GitSnapshot {
         guard let tool = await tool() else { return .state(.gitMissing) }
         let url = URL(fileURLWithPath: path)
-        return await offMain(lane: lane) { snapshot(tool: tool, url: url, commandTimeout: commandTimeout) }
+        return await offMain(lane: lane) { snapshot(tool: tool, url: url, commandTimeout: commandTimeout, comparingToLastCommit: comparingToLastCommit) }
     }
 
     private static func snapshot(tool: GitTool, url: URL,
-                                 commandTimeout: TimeInterval?) -> GitSnapshot {
+                                 commandTimeout: TimeInterval?, comparingToLastCommit: Bool) -> GitSnapshot {
         var isDirectory: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
         guard exists && isDirectory.boolValue else { return .state(.missingFolder) }
@@ -302,6 +311,7 @@ enum GitInspector {
             let drift = run(tool, ["rev-list", "--left-right", "--count", "HEAD...@{u}"],
                             in: url, timeout: commandTimeout)
             if let drift = drift.aheadBehind {
+                snapshot.trackingKnown = true
                 snapshot.ahead = drift.ahead
                 snapshot.behind = drift.behind
             }
@@ -316,8 +326,12 @@ enum GitInspector {
         var files = parseStatus(status.text)
 
         var counts: [String: (added: Int?, removed: Int?, binary: Bool)] = [:]
-        for arguments in [["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "-M"],
-                          ["diff", "--cached", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "-M"]] {
+        let countArguments = comparingToLastCommit
+            ? [["diff", snapshot.hasCommits ? "HEAD" : "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+                "--numstat", "-z", "--no-ext-diff", "--no-textconv", "-M"]]
+            : [["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "-M"],
+               ["diff", "--cached", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "-M"]]
+        for arguments in countArguments {
             let output = run(tool, arguments, in: url, timeout: commandTimeout)
             guard output.ok else { continue }
             for entry in parseNumstat(output.text) {
@@ -872,6 +886,63 @@ enum GitInspector {
         }
         return text
     }
+
+    static func reviewDiff(for change: GitChange, root: String) async -> FileDiff {
+        if change.isBinary || FileTree.imageKinds.contains((change.path as NSString).pathExtension.lowercased()) {
+            return await diff(for: change, root: root)
+        }
+        guard let tool = await tool() else { return FileDiff(note: "Git is unavailable.") }
+        return await offMain(lane: .interactive) {
+            let output = run(tool, patchArguments(for: change, tool: tool, root: root), in: URL(fileURLWithPath: root))
+            guard output.ok || (change.isUntracked && output.status == 1) else { return FileDiff(note: output.failureMessage) }
+            let parsed = parse(output.text, startingAt: 0, limit: diffLineLimit,
+                               revision: .workingTree, path: change.path)
+            return FileDiff(lines: parsed.lines, truncated: parsed.truncated || output.truncated,
+                            totalLines: parsed.total, revealed: parsed.extra,
+                            note: parsed.binary ? "Binary file. Line by line changes are not shown." : nil)
+        }
+    }
+
+    private static func patchArguments(for change: GitChange, tool: GitTool, root: String) -> [String] {
+        if change.isUntracked {
+            return ["diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", change.path]
+        }
+        var paths = [change.path]
+        if let original = change.originalPath { paths.insert(original, at: 0) }
+        let head = run(tool, ["rev-parse", "--verify", "HEAD"], in: URL(fileURLWithPath: root))
+        let base = head.ok ? "HEAD" : "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        return ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base, "--"] + paths
+    }
+
+    enum CopyVersion: Sendable { case patch, before, after }
+
+    static func copyText(for change: GitChange, root: String, version: CopyVersion) async -> Result<String, CopyError> {
+        guard let tool = await tool() else { return .failure(CopyError(message: "Git is unavailable.")) }
+        return await offMain(lane: .interactive) {
+            let url = URL(fileURLWithPath: root)
+            if version == .after || (version == .before && (change.isUntracked || change.kind == .added)) {
+                if version == .before || change.kind == .deleted { return .success("") }
+                do {
+                    let file = url.appendingPathComponent(change.path)
+                    let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    guard size <= outputByteLimit else {
+                        return .failure(CopyError(message: "This file is too large to copy in full. Open it in an editor to copy it."))
+                    }
+                    return .success(try String(contentsOf: file, encoding: .utf8))
+                } catch { return .failure(CopyError(message: error.localizedDescription)) }
+            }
+            let arguments = version == .before
+                ? ["show", "HEAD:" + (change.originalPath ?? change.path)]
+                : patchArguments(for: change, tool: tool, root: root)
+            let result = run(tool, arguments, in: url)
+            guard (result.ok || (change.isUntracked && result.status == 1)), !result.truncated else {
+                return .failure(CopyError(message: result.truncated ? "This file is too large to copy in full. Open it in an editor to copy it." : result.failureMessage))
+            }
+            return .success(result.text)
+        }
+    }
+
+    struct CopyError: Error, Sendable { let message: String }
 
     // MARK: - Untracked files
 

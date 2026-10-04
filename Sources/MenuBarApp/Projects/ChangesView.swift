@@ -88,6 +88,13 @@ struct ChangesView: View {
     @Environment(GitStatsCache.self) private var gitStats
     @Environment(AppSettings.self) private var appSettings
 
+    @State private var copied: GitInspector.CopyVersion?
+    @State private var copiedPath: String?
+    @State private var checkedAt: Date?
+    @State private var refreshFailed = false
+    @State private var feedback = ""
+    @State private var latestCommit: GitCommitSummary?
+    @State private var openLatestCommit = false
     @State private var snapshot: GitSnapshot?
     @State private var loading = false
     @State private var working: String?
@@ -137,6 +144,16 @@ struct ChangesView: View {
             header
             if committing && mode == .changes { commitBar }
             content
+            if let checkedAt {
+                HStack {
+                    Text(feedback.isEmpty ? "Git status checked" : feedback)
+                    Spacer()
+                    Text(checkedAt, style: .relative)
+                }
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .padding(.horizontal, 20).padding(.vertical, 8)
+                .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+            }
         }
         .background(Theme.background)
         // The screen opens on the last snapshot taken of this tree while a fresh one
@@ -161,15 +178,93 @@ struct ChangesView: View {
         }
     }
 
+    private var syncStatus: String {
+        snapshot?.syncDescription(remoteUnavailable: refreshFailed) ?? "Checking branch status"
+    }
+
+    private var cleanContent: some View {
+        VStack(spacing: 16) {
+            PaneMessage(icon: "checkmark.seal", title: "No uncommitted changes",
+                        detail: "The working tree has no pending changes.\n" + syncStatus) {
+                ActionButton(title: "View commit history") { mode = .history }
+            }
+            .frame(maxHeight: 260)
+            if let subject = snapshot?.lastCommitSubject {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Latest commit").font(.system(size: 12, weight: .semibold))
+                    Button { openLatestCommit = true; mode = .history } label: {
+                        HStack {
+                            Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                            Text(subject).font(.system(size: 13, weight: .medium))
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                        }.contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                    if let latestCommit {
+                        Text("\(latestCommit.shortHash) · \(latestCommit.author) · \(latestCommit.relativeDate)")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    } else if let date = snapshot?.lastCommitDate {
+                        Text(date, style: .relative).font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    Text(snapshot?.upstream.map { "Tracking " + $0 } ?? "No upstream branch")
+                        .font(.mono(11)).foregroundStyle(.secondary)
+                }
+                .padding(20).background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+                .frame(maxWidth: 660)
+            }
+            Spacer()
+        }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func announce(_ text: String) {
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+    }
+
+    private func versionHeader(_ title: String, version: GitInspector.CopyVersion, file: GitChange) -> some View {
+        HStack {
+            Text(title).font(.system(size: 12))
+            Spacer()
+            copyButton(version, file: file, label: "Copy")
+        }.frame(maxWidth: .infinity)
+    }
+
+    private func copyButton(_ version: GitInspector.CopyVersion, file: GitChange, label: String) -> some View {
+        Button {
+            Task {
+                let result = await GitInspector.copyText(for: file, root: repoRoot, version: version)
+                switch result {
+                case .success(let text):
+                    guard Pasteboard.copy(text) else {
+                        dialogs.show(.notice("Could not copy", message: "The clipboard is unavailable. Try Copy again."))
+                        return
+                    }
+                    copied = version
+                    copiedPath = file.id
+                    announce("Copied " + file.fileName)
+                    try? await Task.sleep(for: .seconds(2))
+                    copied = nil
+                case .failure(let error):
+                    dialogs.show(.notice("Could not copy", message: error.message + " Try refreshing or open the file in an editor."))
+                }
+            }
+        } label: {
+            Label(copied == version && copiedPath == file.id ? "Copied" : label, systemImage: "doc.on.doc")
+                .font(.system(size: 12)).padding(8)
+                .background(Theme.field, in: RoundedRectangle(cornerRadius: 7)).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+        .accessibilityLabel(version == .patch ? "Copy unified diff" : version == .before ? "Copy last commit version" : "Copy working tree version")
+    }
+
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 14) {
+        ChangesHeaderLayout {
             if let snapshot, snapshot.state == .ready {
-                branchControl(snapshot)
-
                 HeaderTabToggle(selection: $mode,
                                 options: [("Changes", .changes), ("History", .history)])
+                branchControl(snapshot)
 
                 if !snapshot.hasCommits {
                     Text("no commits yet").font(.system(size: 12)).foregroundStyle(.secondary)
@@ -186,7 +281,8 @@ struct ChangesView: View {
                     }
                 }
 
-                Spacer()
+                Spacer().layoutValue(key: ChangesHeaderFlexibleSpace.self, value: true)
+                Text(syncStatus).font(.system(size: 11)).foregroundStyle(.secondary)
 
                 if let working {
                     HStack(spacing: 6) {
@@ -206,22 +302,27 @@ struct ChangesView: View {
                         }
                     }
                 }
-                if snapshot.upstream != nil {
+                if snapshot.upstream != nil && snapshot.behind > 0 {
                     headerAction("Pull", icon: "arrow.down", count: snapshot.behind) { pull() }
                 }
-                if snapshot.hasCommits {
-                    headerAction("Push", icon: "arrow.up", count: snapshot.ahead) {
+                if snapshot.hasCommits && (snapshot.upstream == nil || snapshot.ahead > 0) {
+                    headerAction(snapshot.upstream == nil ? "Publish branch" : "Push", icon: "arrow.up", count: snapshot.ahead) {
                         confirmPush(snapshot)
                     }
                 }
             } else {
                 Text((root as NSString).lastPathComponent).font(.system(size: 13, weight: .medium))
-                Spacer()
+                Spacer().layoutValue(key: ChangesHeaderFlexibleSpace.self, value: true)
                 if loading { ProgressView().controlSize(.small) }
             }
 
             Button {
-                Task { await reload(fetchOrigin: true) }
+                Task {
+                    await reload(fetchOrigin: true)
+                    feedback = snapshot?.state != .ready ? "Could not read Git status. Try Refresh again."
+                        : refreshFailed ? "Remote refresh failed. Try Refresh again." : "Git status refreshed."
+                    announce(feedback)
+                }
             } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .semibold))
             }
@@ -229,10 +330,13 @@ struct ChangesView: View {
             .hoverLift(amount: Motion.smallLift)
             .foregroundStyle(Theme.accent)
             .disabled(busy)
-            .appTooltip("Refresh")
+            .appTooltip("Refresh Git status")
+            .accessibilityLabel("Refresh Git status")
         }
         .padding(.horizontal, 20)
-        .headerBand(height: Theme.subHeaderHeight)
+        .padding(.vertical, 12)
+        .background(Theme.card)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
     private func branchControl(_ snapshot: GitSnapshot) -> some View {
@@ -426,21 +530,31 @@ struct ChangesView: View {
             if mode == .history {
                 historyContent
             } else if files.isEmpty {
-                PaneMessage(icon: "checkmark.seal", title: "No uncommitted changes",
-                            detail: "The working tree matches the last commit.")
+                cleanContent
             } else {
-                list(files, isOpen: selected != nil,
-                     activeID: fileSelection.activeID, row: row)
-                if let file = selected {
-                    Divider().overlay(Theme.hairline)
-                    diffPane(truncationHint: "Open the file to see the rest.",
-                             reveal: { reveal(file) }) {
-                        Text(file.fileName).font(.serif(15, .semibold)).lineLimit(1)
-                        Text(file.kind.label).font(.system(size: 11)).foregroundStyle(.secondary)
-                        if fileSelection.ids.count > 1 {
-                            Text("\(fileSelection.ids.count) files selected")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text("\(counted(files.count, "changed file"))").font(.system(size: 12, weight: .semibold))
+                            Spacer()
+                            DiffPair(added: snapshot?.totalAdded ?? 0, removed: snapshot?.totalRemoved ?? 0, size: 11)
+                        }.padding(20)
+                        list(files, isOpen: false, activeID: fileSelection.activeID, row: row)
+                    }
+                    .frame(width: selected == nil ? nil : 300)
+                    .background(Theme.card)
+                    if let file = selected {
+                        Divider().overlay(Theme.hairline)
+                        diffPane(truncationHint: "Open the file to see the rest.",
+                                 reveal: { reveal(file) }) {
+                            Text(file.fileName).font(.serif(15, .semibold)).lineLimit(1)
+                            Text(file.kind.label).font(.system(size: 11)).foregroundStyle(.secondary)
+                            counts(file)
+                            if fileSelection.ids.count > 1 {
+                                Text("\(fileSelection.ids.count) files selected")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -462,9 +576,7 @@ struct ChangesView: View {
         }
     }
 
-    // The rows above a diff, for files and for commits alike. The list fills the pane
-    // until something is open, then gives the diff the room. It takes focus so the arrow
-    // keys can walk it, and follows the open row down as they do.
+    // File and history lists share selection and keyboard behavior.
     private func list<Item: Identifiable, Row: View>(
         _ items: [Item], isOpen: Bool, activeID: Item.ID?,
         @ViewBuilder row: @escaping (Item) -> Row) -> some View {
@@ -487,7 +599,6 @@ struct ChangesView: View {
         .contentShape(Rectangle())
         .focusable()
         .focused($listFocused)
-        .focusEffectDisabled()
         .onMoveCommand(perform: moveSelection)
         .task { listFocused = true }
     }
@@ -520,6 +631,7 @@ struct ChangesView: View {
                         .lineLimit(1)
                         .truncationMode(.head)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(file.kind.label).font(.system(size: 11)).foregroundStyle(.secondary)
                     if let original = file.originalPath {
                         Text("was \(original)")
                             .font(.mono(10))
@@ -538,7 +650,7 @@ struct ChangesView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .surface(isSelected ? Theme.card : .clear, cornerRadius: 8,
+            .surface(isSelected ? Theme.accent.opacity(0.1) : .clear, cornerRadius: 8,
                      border: isSelected ? Theme.border : .clear)
             .contentShape(Rectangle())
         }
@@ -584,9 +696,7 @@ struct ChangesView: View {
 
     // MARK: - Diff
 
-    // The open diff under its title row. A file and a commit differ only in what the row
-    // says, whether Finder can show the thing, and where the rest of a cut-short diff can
-    // be read.
+    // History and file reviews share the same diff surface.
     private func diffPane<Title: View>(truncationHint: String, reveal: (() -> Void)? = nil,
                                        @ViewBuilder title: () -> Title) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -604,11 +714,36 @@ struct ChangesView: View {
                 }
                 .buttonStyle(.plain)
                 .hoverLift(amount: Motion.smallLift)
+                .accessibilityLabel("Close diff")
                 .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
 
+            if mode == .changes, let file = selected, !file.isBinary, diff?.images == nil {
+                HStack {
+                    Text("Last commit → Working tree").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                    HStack {
+                        Text(appSettings.changesDiffLayout)
+                        Image(systemName: "chevron.down")
+                    }
+                    .font(.system(size: 12)).padding(8).background(Theme.field, in: RoundedRectangle(cornerRadius: 7))
+                    .appMenu {
+                        ["Unified diff", "Side by side"].map { layout in
+                            .item(MenuItem(label: layout, checked: appSettings.changesDiffLayout == layout, handler: { appSettings.changesDiffLayout = layout }))
+                        }
+                    }
+                    .accessibilityLabel("Diff layout: \(appSettings.changesDiffLayout)")
+                    if appSettings.changesDiffLayout == "Unified diff" { copyButton(.patch, file: file, label: "Copy diff") }
+                }.padding(.horizontal, 20).padding(.vertical, 8)
+                if appSettings.changesDiffLayout == "Side by side" {
+                    HStack {
+                        versionHeader("Last commit", version: .before, file: file)
+                        versionHeader("Working tree", version: .after, file: file)
+                    }.padding(.horizontal, 20).padding(.vertical, 8)
+                }
+            }
             diffBody(truncationHint: truncationHint)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -625,6 +760,11 @@ struct ChangesView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if mode == .changes, diff?.lines.isEmpty == true, !loadingDiff {
+            PaneMessage(icon: "doc", title: "No content changes",
+                        detail: "This file may have metadata changes or changes confined to the index.")
+        } else if mode == .changes, appSettings.changesDiffLayout == "Side by side", let diff {
+            SideBySideDiff(lines: diff.lines, expand: expand)
         } else if let diffText {
             DiffTextView(text: diffText, scroll: diffScroll) { gap, direction in
                 expand(gap, direction)
@@ -954,18 +1094,24 @@ struct ChangesView: View {
 
     private func reload(fetchOrigin: Bool = false) async {
         loading = true
+        if fetchOrigin { refreshFailed = false }
         if fetchOrigin, snapshot?.state == .ready,
            let error = await GitActions.fetchOrigin(at: repoRoot) {
             guard !Task.isCancelled else { return }
+            refreshFailed = true
             dialogs.show(.notice("Could not refresh origin", message: error))
         }
-        let fresh = await GitInspector.snapshot(at: root, lane: .interactive)
+        let fresh = await GitInspector.snapshot(at: root, lane: .interactive, comparingToLastCommit: true)
         guard !Task.isCancelled else { return }
         snapshot = fresh
+        checkedAt = Date()
         // The session header shows the same tree, so a commit or pull made here
         // updates its numbers too rather than waiting for the next run to end.
         gitStats.store(fresh, at: root)
         loading = false
+        if fresh.files.isEmpty && fresh.hasCommits {
+            latestCommit = await GitInspector.recentCommits(at: fresh.root, limit: 1).commits.first
+        }
         excluded.formIntersection(Set(fresh.files.map(\.id)))
         // A push can land between refreshes, and amending a pushed commit is exactly
         // what the checkbox exists to prevent.
@@ -981,9 +1127,8 @@ struct ChangesView: View {
         fileSelection.retain(Set(orderedIDs), in: orderedIDs)
         if !appliedInitialSelection {
             appliedInitialSelection = true
-            if let initiallySelectedPath,
-               fresh.files.contains(where: { $0.id == initiallySelectedPath }) {
-                fileSelection.select(initiallySelectedPath, in: orderedIDs,
+            if let initial = initiallySelectedPath.flatMap({ path in fresh.files.first { $0.id == path } }) ?? fresh.files.first {
+                fileSelection.select(initial.id, in: orderedIDs,
                                      extendingRange: false, toggling: false)
             }
         }
@@ -996,9 +1141,16 @@ struct ChangesView: View {
     }
 
     private func switchedMode() {
-        closeDiff()
+        clearDiffContent()
+        selectedCommit = nil
         if mode == .history {
-            Task { await loadHistory() }
+            Task {
+                await loadHistory()
+                if openLatestCommit, let commit = commits?.first { select(commit) }
+                openLatestCommit = false
+            }
+        } else if let selected {
+            Task { await loadDiff(selected, root: repoRoot) }
         }
     }
 
@@ -1077,12 +1229,12 @@ struct ChangesView: View {
     private func loadCommitDiff(_ commit: GitCommitSummary) async {
         loadingDiff = true
         let loaded = await GitInspector.commitDiff(commit.hash, root: repoRoot)
-        guard !Task.isCancelled, selectedCommit?.id == commit.id else { return }
+        guard !Task.isCancelled, mode == .history, selectedCommit?.id == commit.id else { return }
         diffScroll = .top
         diff = loaded
         diffText = loaded.lines.isEmpty
             ? nil
-            : DiffText.attributed(loaded.lines, scale: appSettings.textSize.scale)
+            : DiffText.attributed(loaded.lines, scale: appSettings.textSize.scale, numbered: mode == .changes)
         loadingDiff = false
     }
 
@@ -1099,10 +1251,10 @@ struct ChangesView: View {
         guard let diff, !diff.lines.isEmpty else { return }
         diffText = DiffText.attributed(
             diff.lines,
-            language: selected.flatMap {
+            language: (mode == .changes ? selected : nil).flatMap {
                 CodeLanguage(fileExtension: ($0.path as NSString).pathExtension)
             },
-            scale: appSettings.textSize.scale)
+            scale: appSettings.textSize.scale, numbered: mode == .changes)
     }
 
     // A grey gap row stands for the unchanged lines the diff skipped. Pressing one of its
@@ -1138,7 +1290,7 @@ struct ChangesView: View {
     }
 
     private func closeDiff() {
-        fileSelection.clear()
+        if mode == .changes { fileSelection.clear() }
         selectedCommit = nil
         clearDiffContent()
     }
@@ -1152,14 +1304,14 @@ struct ChangesView: View {
 
     private func loadDiff(_ file: GitChange, root: String) async {
         loadingDiff = true
-        let loaded = await GitInspector.diff(for: file, root: root)
-        guard !Task.isCancelled, fileSelection.activeID == file.id else { return }
+        let loaded = await GitInspector.reviewDiff(for: file, root: root)
+        guard !Task.isCancelled, mode == .changes, fileSelection.activeID == file.id else { return }
         diffScroll = .top
         diff = loaded
         diffText = loaded.lines.isEmpty ? nil : DiffText.attributed(
             loaded.lines,
             language: CodeLanguage(fileExtension: (file.path as NSString).pathExtension),
-            scale: appSettings.textSize.scale)
+            scale: appSettings.textSize.scale, numbered: mode == .changes)
         loadingDiff = false
     }
 
@@ -1263,4 +1415,57 @@ private struct StatusChip: View {
             .background(RoundedRectangle(cornerRadius: 5).fill(color.opacity(0.16)))
             .appTooltip(kind.label)
     }
+}
+
+private struct ChangesHeaderLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(subviews, width: proposal.width ?? 900).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = arrange(subviews, width: bounds.width)
+        for (index, point) in layout.points.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                                 anchor: .topLeading, proposal: ProposedViewSize(width: min(bounds.width, subviews[index].sizeThatFits(.unspecified).width), height: nil))
+        }
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> (size: CGSize, points: [CGPoint]) {
+        let sizes = subviews.map { view in
+            view.sizeThatFits(ProposedViewSize(width: min(width, view.sizeThatFits(.unspecified).width), height: nil))
+        }
+        var points = Array(repeating: CGPoint.zero, count: subviews.count)
+        var rowStart = 0
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var height: CGFloat = 0
+        func finishRow(endingAt end: Int) {
+            let space = max(0, width - x + 14)
+            var shift: CGFloat = 0
+            for index in rowStart..<end {
+                points[index].x += shift
+                points[index].y = y + (height - sizes[index].height) / 2
+                if subviews[index][ChangesHeaderFlexibleSpace.self] { shift = space }
+            }
+        }
+        for index in subviews.indices {
+            let size = sizes[index]
+            if x > 0 && x + size.width > width {
+                finishRow(endingAt: index)
+                rowStart = index
+                x = 0
+                y += height + 10
+                height = 0
+            }
+            points[index] = CGPoint(x: x, y: y)
+            x += size.width + 14
+            height = max(height, size.height)
+        }
+        finishRow(endingAt: subviews.count)
+        return (CGSize(width: width, height: y + height), points)
+    }
+}
+
+private struct ChangesHeaderFlexibleSpace: LayoutValueKey {
+    static let defaultValue = false
 }

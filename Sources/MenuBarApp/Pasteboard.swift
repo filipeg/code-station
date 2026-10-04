@@ -4,9 +4,10 @@ import UniformTypeIdentifiers
 // Clipboard writes are kept together so text and files both replace the old contents
 // before advertising the types other Mac apps expect.
 enum Pasteboard {
-    static func copy(_ text: String, to pasteboard: NSPasteboard = .general) {
+    @discardableResult
+    static func copy(_ text: String, to pasteboard: NSPasteboard = .general) -> Bool {
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        return pasteboard.setString(text, forType: .string)
     }
 
     static func copy(_ file: URL, to pasteboard: NSPasteboard = .general) {

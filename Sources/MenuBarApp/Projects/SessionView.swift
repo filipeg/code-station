@@ -265,8 +265,8 @@ struct SessionView: View {
                     TroubleshootTabView(sessionID: session.id) { tab = .conversation }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .changes:
-                    ChangesView(root: requestedChange?.root ?? projectDirectory,
-                                initiallySelectedPath: requestedChange?.path)
+                    WorkspaceChangesView(session: session, initialRoot: requestedChange?.root ?? projectDirectory,
+                                         initialPath: requestedChange?.path)
                         .id(requestedChange)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .explorer:
@@ -506,6 +506,7 @@ struct SessionView: View {
             SessionFactsChip(
                 facts: facts,
                 maxWidth: fit == .whole ? Self.branchRoom : Self.foldedBranchRoom,
+                showsBranch: tab != .changes,
                 openChanges: openChanges,
                 contextActions: contextActions,
                 usageTooltip: {

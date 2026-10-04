@@ -330,6 +330,7 @@ struct ContextMenuHost: View {
     @Environment(MenuPresenter.self) private var presenter
 
     @State private var measurement = OverlayMeasurement()
+    @FocusState private var focusedItem: Int?
 
     private var size: CGSize { measurement.size }
 
@@ -424,7 +425,7 @@ struct ContextMenuHost: View {
                              hasTints: Bool,
                              usesSharedMarkColumn: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(presenter.entries.enumerated()), id: \.offset) { _, entry in
+            ForEach(Array(presenter.entries.enumerated()), id: \.offset) { index, entry in
                 switch entry {
                 case .item(let item):
                     MenuItemRow(item: item,
@@ -435,6 +436,8 @@ struct ContextMenuHost: View {
                                 action: item.handler == nil ? nil : { presenter.run(item) },
                                 detailAction: item.detailHandler == nil
                                     ? nil : { presenter.runDetail(item) })
+                        .focused($focusedItem, equals: index)
+                        .accessibilityAddTraits(item.checked ? .isSelected : [])
                         .transition(.fadeIn)
                 case .searchable(let searchable):
                     SearchableMenuItemsView(searchable: searchable,
@@ -456,6 +459,22 @@ struct ContextMenuHost: View {
             }
         }
         .padding(.vertical, 6)
+        .onAppear {
+            guard presenter.entries.allSatisfy({ if case .item = $0 { return true }; return false }) else { return }
+            focusedItem = presenter.entries.firstIndex { if case .item(let item) = $0 { return item.checked }; return false } ?? 0
+        }
+        .onKeyPress(keys: [.upArrow, .downArrow, .home, .end]) { press in
+            let indices = presenter.entries.indices.filter {
+                if case .item(let item) = presenter.entries[$0] { return item.handler != nil }
+                return false
+            }
+            guard !indices.isEmpty else { return .ignored }
+            let current = indices.firstIndex(of: focusedItem ?? -1) ?? 0
+            if press.key == .home { focusedItem = indices.first }
+            else if press.key == .end { focusedItem = indices.last }
+            else { focusedItem = indices[(current + (press.key == .downArrow ? 1 : indices.count - 1)) % indices.count] }
+            return .handled
+        }
     }
 
     // A menu near an edge stays attached to its control when it has one. A right-click
