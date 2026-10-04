@@ -86,6 +86,7 @@ struct HomeView: View {
                     resume(standing)
                     if !oldSessions.isEmpty { cleanup() }
                 }
+                .animation(HomeWorkMapView.reflow, value: map.shape)
                 .padding(24)
             }
         }

@@ -50,6 +50,9 @@ struct HomeWorkMap {
     var waiting: [HomeLive] { active.filter(\.needsAttention) }
     var runningCount: Int { active.count { $0.tone == .running } }
 
+    // Which cards and rows are on the map, so the home page can animate when that changes.
+    var shape: [[UUID]] { groups.map { [$0.id] + $0.sessions.map(\.id) } }
+
     var containerSummary: String {
         let workspaces = groups.count { $0.identity.session.workspaceID != nil }
         let projects = groups.count - workspaces
@@ -83,6 +86,9 @@ struct HomeWorkMapView: View {
     let map: HomeWorkMap
     let compact: Bool
     let open: (HomeLive) -> Void
+    @State private var listHeight: CGFloat = 0
+
+    static let reflow = Animation.smooth(duration: 0.3)
 
     private var spatial: Bool {
         !compact && !map.groups.isEmpty && map.groups.count <= 4
@@ -119,8 +125,9 @@ struct HomeWorkMapView: View {
                         ForEach(map.groups) { group in groupCard(group) }
                     }
                     .padding(3)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
                 }
-                .frame(height: 320)
+                .frame(height: min(listHeight, 320))
             }
         }
         .padding(20)
@@ -177,29 +184,24 @@ struct HomeWorkMapView: View {
             .frame(width: 142)
             if !right.isEmpty { column(right) }
         }
-        .frame(minHeight: 310)
         .backgroundPreferenceValue(MapAnchors.self) { anchors in
             GeometryReader { geometry in
                 if let hub = anchors[.hub] {
                     let center = geometry[hub]
-                    Path { path in
-                        for group in groups {
-                            if let anchor = anchors[.group(group.id)] {
-                                let rect = geometry[anchor]
-                                let isLeft = rect.midX < center.midX
-                                let start = CGPoint(x: isLeft ? center.minX : center.maxX, y: center.midY)
-                                let end = CGPoint(x: isLeft ? rect.maxX : rect.minX, y: rect.midY)
-                                let middle = (start.x + end.x) / 2
-                                path.move(to: start)
-                                path.addCurve(to: end,
-                                              control1: CGPoint(x: middle, y: start.y),
-                                              control2: CGPoint(x: middle, y: end.y))
-                            }
+                    ForEach(groups) { group in
+                        if let anchor = anchors[.group(group.id)] {
+                            let rect = geometry[anchor]
+                            let isLeft = rect.midX < center.midX
+                            MapConnector(start: CGPoint(x: isLeft ? center.minX : center.maxX, y: center.midY),
+                                         end: CGPoint(x: isLeft ? rect.maxX : rect.minX, y: rect.midY))
+                                .stroke(Theme.accent.opacity(0.3), lineWidth: 1.3)
                         }
                     }
-                    .stroke(Theme.accent.opacity(0.3), lineWidth: 1.3)
                 }
             }
+            // The anchors already hold where the cards end up, so without this the lines
+            // would jump there while the cards are still moving.
+            .animation(Self.reflow, value: map.shape)
             .accessibilityHidden(true)
         }
     }
@@ -243,6 +245,26 @@ private struct MapAnchors: PreferenceKey {
     static var defaultValue: [Key: Anchor<CGRect>] { [:] }
     static func reduce(value: inout [Key: Anchor<CGRect>], nextValue: () -> [Key: Anchor<CGRect>]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct MapConnector: Shape {
+    var start: CGPoint
+    var end: CGPoint
+
+    var animatableData: AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData> {
+        get { AnimatablePair(start.animatableData, end.animatableData) }
+        set { start.animatableData = newValue.first; end.animatableData = newValue.second }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let middle = (start.x + end.x) / 2
+        var path = Path()
+        path.move(to: start)
+        path.addCurve(to: end,
+                      control1: CGPoint(x: middle, y: start.y),
+                      control2: CGPoint(x: middle, y: end.y))
+        return path
     }
 }
 
