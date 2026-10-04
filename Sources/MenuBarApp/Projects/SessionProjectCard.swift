@@ -40,11 +40,6 @@ struct SessionProjectCard: View {
                         .appTooltip("Detach from this session")
                     }
                 }
-                Text(project.collapsedPath)
-                    .font(.mono(11.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
                 CheckoutModePicker(usesWorktree: usesWorktree,
                                    supportsWorktree: project.isGitRepository,
                                    selectWorktree: selectWorktree,
