@@ -46,6 +46,11 @@ enum Theme {
         dark: NSColor(srgbRed: 0.58, green: 0.76, blue: 0.60, alpha: 1))
     static let accent = Color(nsColor: accentNSColor)
     static let dotOn = Color(red: 0.243, green: 0.478, blue: 0.275)
+    // The same green read as words on a green band, lifted in dark mode where the light
+    // itself sinks into the band behind it.
+    static let dotOnText = adaptive(
+        light: NSColor(srgbRed: 0.243, green: 0.478, blue: 0.275, alpha: 1),
+        dark: NSColor(srgbRed: 0.49, green: 0.72, blue: 0.52, alpha: 1))
     static let dotOff = Color(red: 0.66, green: 0.66, blue: 0.63)
     static let secret = Color(red: 0.72, green: 0.52, blue: 0.20)
     // Something has stopped and is waiting to be looked at, as opposed to the green of

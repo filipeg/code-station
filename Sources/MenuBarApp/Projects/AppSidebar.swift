@@ -454,7 +454,7 @@ struct AppSidebar: View {
                 isExpanded: expanded && !visible.isEmpty,
                 sessionCount: sessions.count,
                 runningCount: running,
-                finishedCount: store.finishedCount(inWorkspace: workspace.id),
+                needsYouCount: needsYouCount(sessions),
                 isRenaming: renamingID == workspace.id,
                 onOpen: { openWorkspace(workspace) },
                 onToggle: { toggleExpanded(workspace.id, expanded: expanded) },
@@ -521,6 +521,7 @@ struct AppSidebar: View {
                 sessionCount: sessions.count,
                 runningCount: running,
                 finishedCount: store.finishedCount(in: project.id),
+                needsYouCount: needsYouCount(sessions),
                 // A project can hold sessions from either agent, so the total only counts
                 // the ones whose agent is set to show what it spends.
                 cost: sessions.reduce(0) { total, session in
@@ -569,7 +570,8 @@ struct AppSidebar: View {
                 // card is what says so: its light, its line and its time come from there.
                 let live = LiveConversation.of(session.id, store: store, runner: runner)
                     ?? session
-                SidebarRailRow(colour: tint.colour, selectedColour: Theme.accent, selected: selected) {
+                SidebarRailRow(colour: tint.colour, selectedColour: Theme.accent,
+                               selected: selected, pinned: session.isPinned) {
                     SessionCard(session: session,
                                 worktrees: store.worktreeCoverage(for: session),
                                 selected: selected,
@@ -631,6 +633,20 @@ struct AppSidebar: View {
             }
         }
         .transition(.fadeIn)
+    }
+
+    // Read the same way the card reads its own state, so a folded row counts exactly the
+    // cards that would say NEEDS YOU once it is opened.
+    private func needsYouCount(_ sessions: [ChatSession]) -> Int {
+        sessions.count { session in
+            let live = LiveConversation.of(session.id, store: store, runner: runner) ?? session
+            let state = runner.state(live.id)
+            return SessionTone(busy: state.isBusy,
+                               needsInput: runner.question(live.id) != nil,
+                               finished: store.hasFinished(session.id),
+                               waiting: state == .waiting,
+                               waitIsStale: runner.waitIsStale(live.id)) == .needsYou
+        }
     }
 
     private func sidebarRailTint(for avatar: SidebarAvatar, name: String,
@@ -1357,7 +1373,7 @@ private struct WorkspaceHeaderRow: View {
     let isExpanded: Bool
     let sessionCount: Int
     let runningCount: Int
-    let finishedCount: Int
+    let needsYouCount: Int
     let isRenaming: Bool
     let onOpen: () -> Void
     let onToggle: () -> Void
@@ -1376,7 +1392,8 @@ private struct WorkspaceHeaderRow: View {
                     avatar: workspace.sidebarAvatar,
                     name: workspace.name,
                     tint: Theme.workspaceTint,
-                    stacked: true)
+                    stacked: true,
+                    pinned: workspace.isPinned)
                 TextField("Name", text: $draft)
                     .textFieldStyle(.plain)
                     .padding(4)
@@ -1392,15 +1409,12 @@ private struct WorkspaceHeaderRow: View {
                             avatar: workspace.sidebarAvatar,
                             name: workspace.name,
                             tint: Theme.workspaceTint,
-                            stacked: true)
-                        HStack(spacing: 5) {
-                            Text(workspace.name)
-                                .font(.system(size: 13.5, weight: .semibold))
-                                .lineLimit(1)
-                            if workspace.isPinned { PinnedMark() }
-                            if finishedCount > 0 { FinishedDot() }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                            stacked: true,
+                            pinned: workspace.isPinned)
+                        Text(workspace.name)
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -1408,9 +1422,10 @@ private struct WorkspaceHeaderRow: View {
                 .buttonStyle(.plain)
                 .sidebarFocusRing()
                 .accessibilityLabel("Open \(workspace.name)")
-                .accessibilityValue(selected
-                    ? "Current workspace" + (!isExpanded ? activeSessionTitle.map { ". Viewing \($0)" } ?? "" : "")
-                    : "")
+                .accessibilityValue(SidebarRowValue.text(
+                    current: selected ? "Current workspace" : nil,
+                    viewing: !isExpanded ? activeSessionTitle : nil,
+                    pinned: workspace.isPinned))
                 .accessibilityAddTraits(selected && activeSessionTitle == nil ? [.isSelected] : [])
 
                 // The count belongs to the row whether or not it is the current one:
@@ -1420,6 +1435,7 @@ private struct WorkspaceHeaderRow: View {
                 if sessionCount > 0 || runningCount > 0 || hovering {
                     ZStack(alignment: .trailing) {
                         HStack(spacing: 6) {
+                            if !isExpanded, needsYouCount > 0 { NeedsYouChip(count: needsYouCount) }
                             if runningCount > 0 { RunningDot() }
                             if sessionCount > 0 {
                                 Text(counted(sessionCount, "session"))
@@ -1503,6 +1519,7 @@ private struct ProjectHeaderRow: View {
     let sessionCount: Int
     let runningCount: Int
     let finishedCount: Int
+    let needsYouCount: Int
     let cost: Double
     let canRunTask: Bool
     let isRenaming: Bool
@@ -1518,6 +1535,7 @@ private struct ProjectHeaderRow: View {
     @FocusState private var focused: Bool
 
     private var isTask: Bool { project.kind == .adHoc }
+    private var showsNeedsYou: Bool { !isExpanded && needsYouCount > 0 }
 
     var body: some View {
         TreeRow(selected: selected, isExpanded: isExpanded, hovering: hovering) {
@@ -1526,7 +1544,8 @@ private struct ProjectHeaderRow: View {
                     avatar: project.sidebarAvatar,
                     name: project.name,
                     tint: Theme.projectTint(for: project.name),
-                    dashed: project.kind == .adHoc)
+                    dashed: project.kind == .adHoc,
+                    pinned: project.isPinned)
                 TextField("Name", text: $draft)
                     .textFieldStyle(.plain)
                     .padding(4)
@@ -1542,7 +1561,8 @@ private struct ProjectHeaderRow: View {
                             avatar: project.sidebarAvatar,
                             name: project.name,
                             tint: Theme.projectTint(for: project.name),
-                            dashed: project.kind == .adHoc)
+                            dashed: project.kind == .adHoc,
+                            pinned: project.isPinned)
                         HStack(spacing: 5) {
                             if isMissing {
                                 Image(systemName: "exclamationmark.triangle.fill")
@@ -1553,7 +1573,6 @@ private struct ProjectHeaderRow: View {
                                 .font(.system(size: 13.5, weight: .semibold))
                                 .lineLimit(1)
                                 .truncationMode(.tail)
-                            if project.isPinned { PinnedMark() }
                             // The only mark a snoozed project carries. Its tooltip gives
                             // the day its sessions come back into the cleanup list.
                             if let snoozedUntil = project.snoozedUntil,
@@ -1570,7 +1589,6 @@ private struct ProjectHeaderRow: View {
                                         ? "Timer waiting for confirmation"
                                         : schedule.summary)
                             }
-                            if finishedCount > 0 { FinishedDot() }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -1580,20 +1598,22 @@ private struct ProjectHeaderRow: View {
                 .buttonStyle(.plain)
                 .sidebarFocusRing()
                 .accessibilityLabel("Open \(project.name)")
-                .accessibilityValue(selected
-                    ? "Current project" + (!isExpanded ? activeSessionTitle.map { ". Viewing \($0)" } ?? "" : "")
-                    : "")
+                .accessibilityValue(SidebarRowValue.text(
+                    current: selected ? "Current project" : nil,
+                    viewing: !isExpanded ? activeSessionTitle : nil,
+                    pinned: project.isPinned))
                 .accessibilityAddTraits(selected && activeSessionTitle == nil ? [.isSelected] : [])
 
                 // The running light gives way under the pointer to the things you come to
                 // a project row to do. The name gives way while the pointer is here for
                 // those actions, so the wider labels do not make the row grow.
-                if !selected || hovering || runningCount > 0 {
+                if !selected || hovering || runningCount > 0 || showsNeedsYou {
                     ZStack(alignment: .trailing) {
-                        if runningCount > 0 {
-                            RunningDot()
-                                .opacity(hovering ? 0 : 1)
+                        HStack(spacing: 6) {
+                            if showsNeedsYou { NeedsYouChip(count: needsYouCount) }
+                            if runningCount > 0 { RunningDot() }
                         }
+                        .opacity(hovering ? 0 : 1)
 
                         if hovering {
                             // A task is run with its saved prompt rather than opened
@@ -1703,16 +1723,6 @@ private struct RowAction: View {
     }
 }
 
-// A turn ended in a session that was not on screen. It stays until that session is
-// opened, which is the only thing that counts as having read it.
-private struct FinishedDot: View {
-    var body: some View {
-        Circle()
-            .fill(Theme.attention)
-            .frame(width: 7, height: 7)
-    }
-}
-
 // The session's folder holds work git does not have. It rides at the top of the card
 // beside the state, because it is not what the session is doing: it is what deleting the
 // session would cost.
@@ -1731,6 +1741,19 @@ private struct MobileConnectionMark: View {
             .foregroundStyle(Theme.addition)
             .appTooltip("Phone connected")
             .accessibilityLabel("Phone connected")
+    }
+}
+
+// What VoiceOver hears after a row's name. The pin on the tile is decoration, so the row
+// says it is pinned here.
+enum SidebarRowValue {
+    static func text(current: String?, viewing: String?, pinned: Bool) -> String {
+        var parts: [String] = []
+        if let current {
+            parts.append(current + (viewing.map { ". Viewing \($0)" } ?? ""))
+        }
+        if pinned { parts.append("Pinned") }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -1835,17 +1858,21 @@ private struct SessionCard: View {
         return labels.joined(separator: ", ")
     }
 
+    // A session that is doing something, or wants the user, wears its state line as a band
+    // across the top of the card. The title below stays on the plain card, so it reads as
+    // easily as an idle one.
     private var cardContent: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        let band = tone.band
+        let edge: CGFloat = selected ? 9 : 8
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 StateLight(tone: tone)
                 Text(tone.word)
                     .font(.mono(9, .semibold))
                     .kerning(0.9)
-                    .foregroundStyle(tone.colour)
+                    .foregroundStyle(band?.word ?? tone.colour)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
-                if session.isPinned { PinnedMark() }
                 // WT means every checkout is a worktree. A session that is only partly
                 // in worktrees still shares a folder, so it wears MIXED in the amber of
                 // something that needs a look. The tooltip names which projects share.
@@ -1866,31 +1893,48 @@ private struct SessionCard: View {
                     .foregroundStyle(.tertiary)
                     .opacity(hovering ? 0 : 1)
             }
-
-            if isRenaming {
-                TextField("Name", text: $draft)
-                    .textFieldStyle(.plain)
-                    .padding(4)
-                    .fieldSurface(cornerRadius: 5)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .focused($focused)
-                    .onSubmit { onRename(draft) }
-                    .onExitCommand(perform: onCancelRename)
-            } else {
-                Text(session.title)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .lineLimit(selected ? 2 : 1)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .truncationMode(.tail)
-                    .changingName(session.title)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.top, band == nil ? edge : 6)
+            .padding(.bottom, band == nil ? 0 : 5)
+            .background {
+                if let band {
+                    ZStack {
+                        band.fill
+                        if let stripe = band.stripe {
+                            StripeFill(colour: stripe, drifts: band.drifts)
+                        }
+                    }
+                }
             }
 
-            ActivityLine(activity: activity)
+            VStack(alignment: .leading, spacing: 5) {
+                if isRenaming {
+                    TextField("Name", text: $draft)
+                        .textFieldStyle(.plain)
+                        .padding(4)
+                        .fieldSurface(cornerRadius: 5)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .focused($focused)
+                        .onSubmit { onRename(draft) }
+                        .onExitCommand(perform: onCancelRename)
+                } else {
+                    Text(session.title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .lineLimit(selected ? 2 : 1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .truncationMode(.tail)
+                        .changingName(session.title)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                ActivityLine(activity: activity)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, band == nil ? 5 : 7)
+            .padding(.bottom, edge)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, selected ? 9 : 8)
         .background(RoundedRectangle(cornerRadius: 9).fill(cardFill))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9)
             .stroke(cardStroke, lineWidth: selected ? 1.4 : 1.2))
         .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: [busy, finished])
@@ -1938,7 +1982,7 @@ private struct SessionCard: View {
 
     // White is what being open looks like, so only the selected card gets it - two white
     // cards in the rail read as two open sessions. A card that is doing something says so
-    // through its ring, its state light and its word, which no other card has.
+    // through its ring, its band, its state light and its word, which no other card has.
     private var cardFill: Color {
         if selected { return Theme.card }
         return hovering ? Theme.field : Theme.sunken
