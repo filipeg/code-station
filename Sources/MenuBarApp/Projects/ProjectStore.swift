@@ -1101,6 +1101,12 @@ final class ProjectStore {
         saveIndex()
     }
 
+    func markScheduledRun(_ sessionID: UUID) {
+        guard let i = index(sessionID), !sessions[i].isScheduledRun else { return }
+        sessions[i].isScheduledRun = true
+        saveIndex()
+    }
+
     // A session becomes a diagnosis the moment a brief is sent from its Troubleshoot tab.
     // The marker is what the sidebar filter and the header chip read, so it has to outlive
     // the turn that set it.

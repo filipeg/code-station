@@ -143,7 +143,8 @@ enum ScheduledTaskExecution {
         // The blocker check has already made sure every required answer is there.
         let values = TaskRun.automaticValues(for: task) ?? [:]
 
-        let result = TaskRun.run(task, values: values, store: store, runner: runner,
+        let result = TaskRun.run(task, values: values, scheduled: true, store: store,
+                                 runner: runner,
                                  agentAvatarName: agentAvatarName)
         switch result {
         case .success(let session):

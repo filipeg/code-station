@@ -136,6 +136,8 @@ struct ScheduledTaskExecutionTests {
         #expect(store.transcript(of: session.id).contains {
             $0.role == .user && $0.text == "Deploy production."
         })
+        #expect(store.session(session.id)?.isScheduledRun == true)
+        #expect(ProjectStore(storeURL: storeURL).session(session.id)?.isScheduledRun == true)
         let saved = try #require(store.project(task.id)?.task?.schedule)
         #expect(saved.completedRuns == 1)
         #expect(saved.hasReachedMaximum)
@@ -148,5 +150,29 @@ struct ScheduledTaskExecutionTests {
                            task: TaskSpec(prompt: "Deploy {{environment}}."))
 
         #expect(TaskRun.automaticValues(for: task) == nil)
+    }
+
+    @Test func namesTheRequiredInputsAScheduledRunWouldHaveNoAnswerFor() {
+        var spec = TaskSpec(prompt: "Deploy {{environment}} to {{region}} {{note}} {{ticket}}.")
+        spec.inputs = [TaskInput(name: "region", defaultValue: "eu"),
+                       TaskInput(name: "note", required: false)]
+        spec.lastValues = ["ticket": "OPS-12"]
+
+        #expect(TaskRun.unansweredInputs(in: spec).map(\.name) == ["environment"])
+
+        spec.inputs.append(TaskInput(name: "environment", defaultValue: "staging"))
+        #expect(TaskRun.unansweredInputs(in: spec).isEmpty)
+    }
+
+    @Test func aRunStartedByHandIsNotMarkedAsScheduled() throws {
+        let scratch = ScratchDirectory(prefix: "code-station-task-schedule-tests")
+        let store = ProjectStore(storeURL: scratch.path("projects.json"))
+        let task = try store.addTask(named: "Notes", prompt: "Write notes.",
+                                     in: scratch.path("tasks")).get()
+
+        let session = try TaskRun.run(task, store: store, runner: SessionRunner(paths: [:]),
+                                      agentAvatarName: nil).get()
+
+        #expect(store.session(session.id)?.isScheduledRun == false)
     }
 }

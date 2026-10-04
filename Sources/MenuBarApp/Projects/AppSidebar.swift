@@ -1152,10 +1152,19 @@ struct AppSidebar: View {
     private func createTask(_ draft: NewTaskDraft) {
         switch store.addTask(named: draft.name, prompt: draft.prompt) {
         case .success(let project):
+            if var spec = project.task {
+                spec.agent = draft.agent
+                spec.agentAvatarName = draft.agentAvatarName
+                if var schedule = draft.schedule {
+                    schedule.restart()
+                    spec.schedule = schedule
+                }
+                store.setTaskSpec(spec, for: project.id)
+            }
             setExpanded(true, for: project.id)
             filterBox.clear()
             store.selectProject(project.id, revealingInSidebar: true)
-            if draft.runNow { runTask(project) }
+            if draft.runNow { runTask(store.project(project.id) ?? project) }
         case .failure(let failure):
             dialogs.show(.notice("Could not create the task", message: failure.message))
         }

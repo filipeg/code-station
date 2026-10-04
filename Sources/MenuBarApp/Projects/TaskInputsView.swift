@@ -1,9 +1,9 @@
 import SwiftUI
 
-// What the prompt asks for, listed under it. Rows appear and disappear as the prompt is
-// written, because the prompt is where a hole is declared: this is where each hole is
-// dressed up, not where it is created. A row left untouched is a required line of text,
-// which is what most holes want to be.
+// What the prompt asks for, beside it. Rows appear and disappear as the prompt is written,
+// because the prompt is where a hole is declared: this is where each hole is dressed up,
+// not where it is created. A row left untouched is a required line of text, which is what
+// most holes want to be. The card stays even with no holes, to say how to make one.
 struct TaskInputsCard: View {
     let inputs: [TaskInput]
     let onChange: (TaskInput) -> Void
@@ -11,19 +11,35 @@ struct TaskInputsCard: View {
     @State private var expanded: Set<String> = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            SectionRule(title: "INPUTS") {
-                Text("\(inputs.count)")
-                    .font(.mono(10))
-                    .foregroundStyle(.tertiary)
-            }
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Inputs")
+                .font(.system(size: 13, weight: .semibold))
 
-            VStack(spacing: 8) {
-                ForEach(inputs, id: \.name) { input in
-                    row(input)
+            if inputs.isEmpty {
+                Text("None yet. Write \(Text(verbatim: "{{ticket}}").font(.mono(11.5)).foregroundStyle(Theme.accent)) in the prompt and every run asks for a ticket first.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Asked for before each run, in the order they appear.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: 6) {
+                    ForEach(inputs, id: \.name) { input in
+                        row(input)
+                    }
                 }
+                .padding(.top, 4)
             }
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface(cornerRadius: 12)
+        .smoothlyResizes(when: inputs.map(\.name))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Inputs")
     }
 
     private func row(_ input: TaskInput) -> some View {
@@ -33,64 +49,61 @@ struct TaskInputsCard: View {
             Button {
                 if open { expanded.remove(key) } else { expanded.insert(key) }
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Text("{{\(input.name)}}")
                         .font(.mono(11))
                         .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.field))
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Theme.field))
+                        .layoutPriority(1)
                     Text(input.title)
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Text(input.kind.title.lowercased())
+                    Spacer(minLength: 6)
+                    Text(input.kind.title.lowercased() + (input.required ? "" : ", optional"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    if !input.required {
-                        Text("optional")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    }
+                        .lineLimit(1)
+                        .fixedSize()
                     Image(systemName: open ? "chevron.up" : "chevron.down")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 40)
+                .padding(.horizontal, 10)
+                .frame(height: 36)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .hoverFill(cornerRadius: 8)
+            .hoverFill(cornerRadius: 9)
+            .accessibilityValue(open ? "Expanded" : "Collapsed")
 
             if open {
-                VStack(alignment: .leading, spacing: 0) {
-                    Divider().overlay(Theme.hairline)
-                    editor(input)
-                        .padding(12)
-                }
-                .transition(.fadeIn)
+                editor(input)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 2)
+                    .padding(.bottom, 10)
+                    .transition(.fadeIn)
             }
         }
-        .cardSurface(cornerRadius: 10)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.sunken))
         .smoothlyResizes(when: "\(open):\(input.kind.rawValue)")
     }
 
+    // One column, since the side card is too narrow to put two fields side by side.
     private func editor(_ input: TaskInput) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                field("LABEL", placeholder: input.title,
-                      text: binding(input, \.label))
-                OptionMenu(caption: "KIND", value: input.kind.title) {
-                    TaskInput.Kind.allCases.map { kind in
-                        .item(kind.title, checked: kind == input.kind) {
-                            var updated = input
-                            updated.kind = kind
-                            onChange(updated)
-                        }
+        VStack(alignment: .leading, spacing: 10) {
+            field("LABEL", placeholder: input.title, text: binding(input, \.label))
+            OptionMenu(caption: "KIND", value: input.kind.title) {
+                TaskInput.Kind.allCases.map { kind in
+                    .item(kind.title, checked: kind == input.kind) {
+                        var updated = input
+                        updated.kind = kind
+                        onChange(updated)
                     }
                 }
-                .frame(width: 150)
             }
 
             switch input.kind {
@@ -99,22 +112,17 @@ struct TaskInputsCard: View {
                       text: optionList(input),
                       note: "One line of choices, separated by commas.")
             case .toggle:
-                HStack(alignment: .top, spacing: 12) {
-                    field("WHEN ON", placeholder: "yes", text: option(input, 0))
-                    field("WHEN OFF", placeholder: "left out", text: option(input, 1))
-                }
+                field("WHEN ON", placeholder: "yes", text: option(input, 0))
+                field("WHEN OFF", placeholder: "left out", text: option(input, 1))
             default:
                 EmptyView()
             }
 
-            HStack(alignment: .top, spacing: 12) {
-                if input.kind != .toggle {
-                    field("DEFAULT", placeholder: "empty", text: binding(input, \.defaultValue))
-                        .transition(.fadeIn)
-                }
-                field("HINT", placeholder: "What this is for",
-                      text: binding(input, \.hint))
+            if input.kind != .toggle {
+                field("DEFAULT", placeholder: "Empty", text: binding(input, \.defaultValue))
+                    .transition(.fadeIn)
             }
+            field("HINT", placeholder: "What this is for", text: binding(input, \.hint))
 
             if input.kind != .toggle {
                 Toggle(isOn: Binding(get: { input.required },
