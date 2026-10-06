@@ -187,9 +187,14 @@ final class DispatchRunner {
             set(header.key, header.value)
         }
 
+        // The body stays saved on a method that cannot carry one, so switching back
+        // brings it back.
         var body: String?
-        if request.bodyType != .none, !request.body.isEmpty {
-            body = request.body
+        if request.method.canCarryBody, request.bodyType != .none {
+            let sentBody = request.sentBody
+            if !sentBody.isEmpty { body = sentBody }
+        }
+        if body != nil {
             // A Content-Type typed by hand is the more deliberate choice, so the one
             // implied by the body type only fills a gap.
             if !headers.contains(where: { $0.key.caseInsensitiveCompare("Content-Type") == .orderedSame }),
@@ -301,15 +306,6 @@ final class DispatchRunner {
               data.count <= 256 * 1024,
               contentType?.localizedCaseInsensitiveContains("json") == true
         else { return text }
-        return prettyJSON(data) ?? text
-    }
-
-    private static func prettyJSON(_ data: Data) -> String? {
-        guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
-              let pretty = try? JSONSerialization.data(
-                withJSONObject: object,
-                options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
-        else { return nil }
-        return String(data: pretty, encoding: .utf8)
+        return JSONFormat.pretty(text) ?? text
     }
 }

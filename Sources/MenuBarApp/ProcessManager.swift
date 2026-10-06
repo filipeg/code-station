@@ -181,13 +181,20 @@ final class ProcessManager {
 
     nonisolated private static func search(_ command: String) -> String? {
         if command.contains("/") {
-            return FileManager.default.isExecutableFile(atPath: command) ? command : nil
+            return isExecutableFile(command) ? command : nil
         }
         for dir in searchDirs {
             let path = (dir as NSString).appendingPathComponent(command)
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
+            if isExecutableFile(path) { return path }
         }
         return nil
+    }
+
+    nonisolated private static func isExecutableFile(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && !isDirectory.boolValue
+            && FileManager.default.isExecutableFile(atPath: path)
     }
 
     nonisolated private static let resolved = ResolvedCommands()

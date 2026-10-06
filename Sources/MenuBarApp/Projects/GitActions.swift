@@ -57,6 +57,14 @@ enum GitActions {
         }
     }
 
+    // Creates a local branch that tracks the remote one and switches to it, so pull and
+    // push work on it straight away.
+    static func checkoutRemoteBranch(_ branch: RemoteBranch, at root: String) async -> String? {
+        await perform(at: root) { tool, url in
+            GitInspector.run(tool, ["switch", "--track", branch.ref], in: url)
+        }
+    }
+
     static func createBranch(_ branch: String, at root: String) async -> String? {
         await perform(at: root) { tool, url in
             GitInspector.run(tool, ["switch", "-c", branch], in: url)

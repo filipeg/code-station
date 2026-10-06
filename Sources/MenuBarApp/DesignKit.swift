@@ -76,6 +76,114 @@ struct StateLight: View {
     }
 }
 
+// The state line of a sidebar card, laid as a band across the top of the card so the
+// state can be found down a long rail without reading the word. Needs you is striped and
+// still, running is striped and drifts, waiting is a plain band. Idle has none, which is
+// what makes the other three stand out. The light and the word stay on the band, so the
+// state is never carried by colour or pattern alone.
+struct StateBand: Equatable {
+    let fill: Color
+    let stripe: Color?
+    let drifts: Bool
+    let word: Color
+}
+
+extension SessionTone {
+    var band: StateBand? {
+        switch self {
+        case .needsYou:
+            StateBand(fill: Theme.attention.opacity(0.14), stripe: Theme.attention.opacity(0.3),
+                      drifts: false, word: Theme.attentionText)
+        case .running:
+            StateBand(fill: Theme.dotOn.opacity(0.1), stripe: Theme.dotOn.opacity(0.16),
+                      drifts: true, word: Theme.dotOnText)
+        case .waiting:
+            StateBand(fill: Theme.dotOn.opacity(0.09), stripe: nil, drifts: false,
+                      word: Theme.dotOnText)
+        case .idle:
+            nil
+        }
+    }
+}
+
+enum Stripes {
+    static let period: CGFloat = 14
+    static let driftPeriod: TimeInterval = 1.4
+
+    // How far the pattern has moved along: one whole stripe each drift period, then it
+    // starts over, which looks the same since the pattern repeats once a period.
+    static func offset(at date: Date, period: CGFloat = period) -> CGFloat {
+        let turn = date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: driftPeriod) / driftPeriod
+        return period * turn
+    }
+}
+
+// Diagonal stripes, rising to the right, half of each period painted. One drawing serves
+// the card band and the count chip so the two read as the same mark.
+//
+// The drift reads the clock for the same reason `Breathing` does, and it stops under
+// Reduce Motion. Standing still, the stripes still say the same thing.
+struct StripeFill: View {
+    let colour: Color
+    var period: CGFloat = Stripes.period
+    var drifts = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let moving = drifts && !reduceMotion
+        TimelineView(.animation(paused: !moving)) { context in
+            let offset = moving ? Stripes.offset(at: context.date, period: period) : 0
+            Canvas { canvas, size in
+                var path = Path()
+                let rise = size.height
+                var x = offset - (rise / period).rounded(.up) * period - period
+                while x < size.width {
+                    path.move(to: CGPoint(x: x, y: rise))
+                    path.addLine(to: CGPoint(x: x + period / 2, y: rise))
+                    path.addLine(to: CGPoint(x: x + period / 2 + rise, y: 0))
+                    path.addLine(to: CGPoint(x: x + rise, y: 0))
+                    path.closeSubpath()
+                    x += period
+                }
+                canvas.fill(path, with: .color(colour))
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// How many sessions under a folded row want the user. Once the row is open the cards say
+// it themselves, so the row drops it.
+struct NeedsYouChip: View {
+    let count: Int
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 5)
+        Text(verbatim: "\(count)")
+            .font(.mono(9.5, .bold))
+            .foregroundStyle(Theme.attentionText)
+            .padding(.horizontal, 5)
+            .frame(minWidth: 20, minHeight: 16)
+            .background {
+                ZStack {
+                    shape.fill(Theme.attention.opacity(0.16))
+                    StripeFill(colour: Theme.attention.opacity(0.34), period: 8)
+                        .clipShape(shape)
+                }
+            }
+            .overlay(shape.strokeBorder(Theme.attention.opacity(0.5), lineWidth: 1))
+            .fixedSize()
+            .appTooltip(Self.label(count))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.label(count))
+    }
+
+    static func label(_ count: Int) -> String { "\(count) waiting for you" }
+}
+
 // A green dot for the places that mark "something is running" without naming which
 // session. The active avatar is the single moving status indicator.
 struct RunningDot: View {
@@ -731,26 +839,64 @@ private struct SidebarRailMarkerKey: PreferenceKey {
     }
 }
 
+private enum RailMetrics {
+    static let leading: CGFloat = 20
+    static let top: CGFloat = 5
+    static let bottom: CGFloat = 4
+    static let rowSpacing: CGFloat = 5
+    static let lineWidth: CGFloat = 1.5
+    static let lineInset: CGFloat = 5.25
+    static let lineOpacity = 0.42
+    static let markerTop: CGFloat = 10
+    static let markerSize = CGSize(width: 12, height: 8)
+    static var markerCentre: CGFloat { markerTop + markerSize.height / 2 }
+}
+
 struct SidebarRail<Content: View>: View {
     let colour: Color
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) { content }
+        VStack(alignment: .leading, spacing: RailMetrics.rowSpacing) { content }
             .backgroundPreferenceValue(SidebarRailMarkerKey.self) { markers in
                 GeometryReader { proxy in
                     if let lastMarker = markers.last {
                         Rectangle()
-                            .fill(colour.opacity(0.42))
-                            .frame(width: 1.5, height: proxy[lastMarker].y)
-                            .offset(x: 5.25)
+                            .fill(colour.opacity(RailMetrics.lineOpacity))
+                            .frame(width: RailMetrics.lineWidth, height: proxy[lastMarker].y)
+                            .offset(x: RailMetrics.lineInset)
                             .accessibilityHidden(true)
                     }
                 }
             }
-            .padding(.leading, 20)
-            .padding(.top, 5)
-            .padding(.bottom, 4)
+            .padding(.leading, RailMetrics.leading)
+            .padding(.top, RailMetrics.top)
+            .padding(.bottom, RailMetrics.bottom)
+    }
+}
+
+extension View {
+    // The same rail as `SidebarRail`, drawn one row at a time so each row can stand on its
+    // own in a lazy stack. A long rail held in one stack is built whole, off-screen rows
+    // and all. Each row draws its own piece of the line, reaching up across the gap the
+    // stack leaves above it, and the last piece stops at the last dot.
+    func sidebarRailSegment(colour: Color, isFirst: Bool, isLast: Bool,
+                            stackSpacing: CGFloat) -> some View {
+        let top = (isFirst ? RailMetrics.top : RailMetrics.rowSpacing) - stackSpacing
+        let lineStart = isFirst ? top : -stackSpacing
+        return padding(.top, top)
+            .padding(.bottom, isLast ? RailMetrics.bottom : 0)
+            .background(alignment: .topLeading) {
+                Rectangle()
+                    .fill(colour.opacity(RailMetrics.lineOpacity))
+                    .frame(width: RailMetrics.lineWidth,
+                           height: isLast ? top + RailMetrics.markerCentre - lineStart : nil)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, lineStart)
+                    .offset(x: RailMetrics.lineInset)
+                    .accessibilityHidden(true)
+            }
+            .padding(.leading, RailMetrics.leading)
     }
 }
 
@@ -758,19 +904,29 @@ struct SidebarRailRow<Content: View>: View {
     let colour: Color
     var selectedColour: Color? = nil
     var selected = false
+    // A pinned row wears the pin in place of its dot, so the mark costs the card no
+    // width. The disc behind it is the sidebar colour, which cuts the rail line around it.
+    var pinned = false
     @ViewBuilder let content: Content
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             ZStack {
-                Circle()
-                    .fill(selected ? selectedColour ?? colour : colour.opacity(0.72))
-                    .anchorPreference(key: SidebarRailMarkerKey.self, value: .center) {
-                        [$0]
-                    }
+                if pinned {
+                    Circle()
+                        .fill(Theme.sidebar)
+                        .frame(width: 16, height: 16)
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                } else {
+                    Circle()
+                        .fill(selected ? selectedColour ?? colour : colour.opacity(0.72))
+                }
             }
-            .frame(width: 12, height: 8)
-            .padding(.top, 10)
+            .frame(width: RailMetrics.markerSize.width, height: RailMetrics.markerSize.height)
+            .anchorPreference(key: SidebarRailMarkerKey.self, value: .center) { [$0] }
+            .padding(.top, RailMetrics.markerTop)
             .accessibilityHidden(true)
 
             content

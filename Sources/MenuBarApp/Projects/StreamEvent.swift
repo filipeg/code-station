@@ -5,6 +5,7 @@ import Foundation
 // time, so anything unrecognised is dropped instead of failing the turn.
 enum StreamEvent: Sendable {
     case initialized(claudeSessionID: String)
+    case turnStarted
     case text(String)
     // What the model worked out to itself before answering. It is part of the turn but
     // not of the answer, so it is kept apart from the text.
@@ -65,6 +66,7 @@ struct BackgroundTask: Identifiable, Codable, Equatable, Sendable {
     // running, so this is the only thing a row counting the task up can count from.
     var startedAt = Date()
     var toolUseID: String?
+    var command: String?
 
     var isAgent: Bool {
         agentName?.isBlank == false || kind == "local_agent" || kind == "local_workflow"
@@ -105,6 +107,8 @@ extension StreamEvent {
         switch self {
         case .initialized:
             "initialized"
+        case .turnStarted:
+            "turn started"
         case .text(let text):
             "text bytes=\(text.utf8.count)"
         case .thinking(let text):

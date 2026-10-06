@@ -15,6 +15,9 @@ final class CodexCodeManager {
         var url: String?
         var type: String?
         var enabled = true
+        // Codex's own word for the sign-in: "unsupported", "not_logged_in",
+        // "bearer_token" or "o_auth".
+        var authStatus: String?
     }
 
     private struct ListedServer: Decodable {
@@ -26,6 +29,12 @@ final class CodexCodeManager {
         let name: String
         let enabled: Bool
         let transport: Transport?
+        let authStatus: String?
+
+        enum CodingKeys: String, CodingKey {
+            case name, enabled, transport
+            case authStatus = "auth_status"
+        }
 
         var disabledSnapshot: DisabledMCPServer? {
             if transport?.command != nil {
@@ -47,7 +56,9 @@ final class CodexCodeManager {
                                          notFoundMessage: "Codex CLI not found on PATH.")
     private(set) var entries: [String: Entry] = [:]
     private(set) var isRefreshing = false
+    private(set) var checkedAt: Date?
     let available: Bool
+    let serverWork = AgentServerWork()
 
     var bulkBusy: Bool { registrar.bulkBusy }
     var errors: [String: String] { registrar.errors }
@@ -100,19 +111,122 @@ final class CodexCodeManager {
         let fallbackNames = servers.map(\.name)
         Task {
             let listed = await Self.output(codexPath, ["mcp", "list", "--json"])
-            let names = listed.flatMap { Self.serverNames(in: Data($0.utf8)) } ?? fallbackNames
+            let states = listed.flatMap { Self.listedStates(in: Data($0.utf8)) }
+            let names = states.map { $0.keys.sorted() } ?? fallbackNames
             var found: [String: Entry] = [:]
             for name in names {
                 guard refreshID == id else { return }
                 if let output = await Self.output(codexPath, ["mcp", "get", name, "--json"]),
-                   let entry = Entry(json: output) {
+                   var entry = Entry(json: output) {
+                    if let state = states?[name] {
+                        entry.enabled = state.enabled
+                        entry.authStatus = state.authStatus
+                    }
                     found[name] = entry
                 }
             }
             guard refreshID == id else { return }
             entries = found
             isRefreshing = false
+            checkedAt = .now
         }
+    }
+
+    // MARK: - Servers Codex owns
+
+    func work(on name: String) -> AgentConfiguredServer.Work? {
+        serverWork.work[name] ?? (isRefreshing ? .checking : nil)
+    }
+
+    nonisolated static func auth(fromStatus status: String?) -> AgentConfiguredServer.Auth {
+        switch status {
+        case "not_logged_in": .signedOut
+        case "o_auth": .signedIn
+        // A bearer token is set in the config, so there is nothing to sign in to.
+        default: .none
+        }
+    }
+
+    func signIn(_ name: String, servers: [Server]) {
+        serverWork.perform(.signingIn, on: name) {
+            try await AgentServerWork.output("codex", ["mcp", "login", name], timeout: .seconds(300))
+        } then: { [weak self] _ in
+            self?.refresh(servers)
+        }
+    }
+
+    func signOut(_ name: String, servers: [Server]) {
+        serverWork.perform(.checking, on: name) {
+            try await AgentServerWork.output("codex", ["mcp", "logout", name], timeout: .seconds(30))
+        } then: { [weak self] _ in
+            self?.refresh(servers)
+        }
+    }
+
+    // `codex mcp` has no command for this, so it is the one place the app writes to
+    // Codex's config itself. The write touches a single key in the server's own table
+    // and leaves every other line as it was.
+    func setEnabled(_ enabled: Bool, for name: String, servers: [Server]) {
+        let configURL = Self.configURL
+        entries[name]?.enabled = enabled
+        serverWork.perform(enabled ? .turningOn : .turningOff, on: name) {
+            try Self.writeEnabled(enabled, for: name, in: configURL)
+        } then: { [weak self] _ in
+            self?.refresh(servers)
+        } otherwise: { [weak self] in
+            // The switch moved before the write, so put it back where Codex has it.
+            self?.refresh(servers)
+        }
+    }
+
+    nonisolated static var configURL: URL {
+        let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        return home.appendingPathComponent("config.toml")
+    }
+
+    // The link is followed so a config kept in a dotfiles folder stays a link.
+    private nonisolated static func writeEnabled(_ enabled: Bool, for name: String,
+                                                 in configURL: URL) throws {
+        let target = configURL.resolvingSymlinksInPath()
+        guard let toml = try? String(contentsOf: target, encoding: .utf8) else {
+            throw AgentServerWork.Failure(message: "Could not read \(configURL.path.abbreviatedPath).")
+        }
+        guard let updated = settingEnabled(enabled, forServer: name, in: toml) else {
+            throw AgentServerWork.Failure(
+                message: "\(name) is not in \(configURL.path.abbreviatedPath). It may come from a Codex plugin, which Codex switches on its own.")
+        }
+        try updated.write(to: target, atomically: true, encoding: .utf8)
+    }
+
+    // The server's table with its `enabled` key set, or nil when the file has no table
+    // of its own for the server. Turning a server on drops the key, since on is what
+    // Codex assumes when it is missing.
+    nonisolated static func settingEnabled(_ enabled: Bool, forServer name: String,
+                                           in toml: String) -> String? {
+        var lines = toml.components(separatedBy: "\n")
+        let headers = ["[mcp_servers.\(name)]", "[mcp_servers.\"\(name)\"]",
+                       "[mcp_servers.'\(name)']"]
+        guard let header = lines.firstIndex(where: { line in
+            let bare = line.trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: " ", with: "")
+            return headers.contains(bare.components(separatedBy: "#")[0])
+        }) else { return nil }
+        let end = lines[(header + 1)...].firstIndex {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("[")
+        } ?? lines.endIndex
+        let existing = lines[(header + 1)..<end].firstIndex {
+            let key = $0.trimmingCharacters(in: .whitespaces)
+            return key.hasPrefix("enabled") && key.dropFirst("enabled".count)
+                .trimmingCharacters(in: .whitespaces).hasPrefix("=")
+        }
+        switch (existing, enabled) {
+        case (let index?, true): lines.remove(at: index)
+        case (let index?, false): lines[index] = "enabled = false"
+        case (nil, true): break
+        case (nil, false): lines.insert("enabled = false", at: header + 1)
+        }
+        return lines.joined(separator: "\n")
     }
 
     func addCommand(for server: Server) -> String? {
@@ -204,10 +318,17 @@ final class CodexCodeManager {
     // MARK: - Private
 
     nonisolated static func serverNames(in data: Data) -> [String]? {
+        listedStates(in: data)?.keys.sorted()
+    }
+
+    // `mcp get` leaves out whether the server is signed in, so that comes from the list.
+    nonisolated static func listedStates(in data: Data)
+        -> [String: (enabled: Bool, authStatus: String?)]? {
         guard let servers = try? JSONDecoder().decode([ListedServer].self, from: data) else {
             return nil
         }
-        return servers.map(\.name).sorted()
+        return Dictionary(servers.map { ($0.name, (enabled: $0.enabled, authStatus: $0.authStatus)) },
+                          uniquingKeysWith: { first, _ in first })
     }
 
     nonisolated static func enabledServers(in data: Data) -> [DisabledMCPServer]? {

@@ -2,8 +2,7 @@ import SwiftUI
 
 // Framing a problem for the agent this session already has. Everything the sheet asks a
 // new diagnosis for - which projects, which agent, which model - is settled the moment a
-// session exists, so the tab reads those off the session and only asks the four things
-// that are still open: the problem, the deployment, the servers and the skills.
+// session exists, so the tab reads those off the session and asks for the brief.
 //
 // The brief lands in Chat as an ordinary first message, which is what makes a second run
 // from here a follow-up rather than a new session.
@@ -27,6 +26,7 @@ struct TroubleshootTabView: View {
     @State private var showingSkills = false
     @State private var hasStartedMCPConfigurationCheck = false
     @FocusState private var problemFocused: Bool
+    @FocusState private var timeFocused: Bool
 
     // The half-written brief is the runner's, not this view's: the pane keeps only the
     // tab that is open, so anything held here would go the moment Chat is looked at.
@@ -41,19 +41,41 @@ struct TroubleshootTabView: View {
 
     var body: some View {
         if let session = store.session(sessionID) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    heading
-                    contextStrip(session)
-                    problemSection
-                    optionsSection(session)
-                    skillsSection(session)
-                    startRow(session)
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        heading
+                        let wide = geometry.size.width >= 850
+                        let layout = wide
+                            ? AnyLayout(HStackLayout(alignment: .top, spacing: 28))
+                            : AnyLayout(VStackLayout(alignment: .leading, spacing: 28))
+                        layout {
+                            VStack(alignment: .leading, spacing: 24) {
+                                problemSection
+                                optionsSection
+                                Divider().overlay(Theme.hairline)
+                                TroubleshootMCPOptions(agent: session.agent,
+                                                       environment: brief.environment,
+                                                       managedServers: configs.servers,
+                                                       environmentServers: environmentMCPServers,
+                                                       state: mcpConfigurationState(session),
+                                                       enabled: entry(\.mcpServersEnabled),
+                                                       showsServerDetails: true)
+                                Divider().overlay(Theme.hairline)
+                                skillsSection(session)
+                                Divider().overlay(Theme.hairline)
+                                startRow(session)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            contextPanel(session)
+                                .frame(width: wide ? 270 : nil)
+                        }
+                    }
+                    .frame(maxWidth: 1066, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, geometry.size.width >= 850 ? 42 : 24)
+                    .padding(.vertical, 32)
                 }
-                .frame(maxWidth: 820, alignment: .leading)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 24)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.background)
@@ -72,35 +94,50 @@ struct TroubleshootTabView: View {
     }
 
     private var heading: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Troubleshoot").font(.serif(21))
-            Text("Frame a problem for this session's agent. It investigates read-only and answers in Chat.")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Troubleshoot").font(.serif(28))
+                Text("Give your agent a starting point. Follow the diagnosis in Chat.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Text("Read-only")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(Capsule().fill(Theme.accent.opacity(0.09)))
+                .accessibilityHint("The brief instructs the agent to investigate without changing code or configuration.")
         }
     }
 
-    // What the tab is not asking about, said once so the omission reads as settled rather
-    // than as missing: the checkouts the diagnosis can see, and the agent that will run it.
-    private func contextStrip(_ session: ChatSession) -> some View {
-        HStack(spacing: 10) {
+    private func contextPanel(_ session: ChatSession) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Session context").font(.system(size: 15, weight: .semibold))
+            Text("Already included in your diagnosis.")
+                .foregroundStyle(.secondary)
+            Text("Projects").foregroundStyle(.secondary).padding(.top, 8)
             ForEach(store.checkoutProjects(for: session), id: \.projectID) { checkout in
                 if let project = store.project(checkout.projectID) {
                     projectChip(project, lead: checkout.projectID == session.projectID)
                 }
             }
+            Text("Agent").foregroundStyle(.secondary).padding(.top, 8)
             agentChip(session)
-            Spacer(minLength: 10)
-            Text("Inherited from the session")
-                .font(.system(size: 12))
+            Divider().overlay(Theme.hairline).padding(.vertical, 8)
+            Text("What happens next").fontWeight(.semibold)
+            Text("Your agent investigates the problem using these projects, the evidence you add, and your selected tools.")
                 .foregroundStyle(.secondary)
-                .fixedSize()
+            Text("Findings and suggested next steps appear in Chat. The brief instructs the agent not to change your code or environment.")
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .surface(Theme.sunken, cornerRadius: 11)
-        .accessibilityElement(children: .combine)
+        .font(.system(size: 12))
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(21)
+        .surface(Theme.sunken, cornerRadius: 12, border: .clear)
     }
 
     private func projectChip(_ project: Project, lead: Bool) -> some View {
@@ -113,14 +150,13 @@ struct TroubleshootTabView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .lineLimit(1)
             if lead {
-                Text("lead")
+                Spacer(minLength: 0)
+                Text("Lead")
                     .font(.mono(10.5))
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 26)
-        .cardSurface(cornerRadius: 7)
+        .frame(minHeight: 26)
         .appTooltip { Tooltip(title: project.name, subtitle: project.collapsedPath) }
     }
 
@@ -135,9 +171,7 @@ struct TroubleshootTabView: View {
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 26)
-        .cardSurface(cornerRadius: 7)
+        .frame(minHeight: 26)
     }
 
     private func modelTitle(_ session: ChatSession) -> String? {
@@ -148,38 +182,61 @@ struct TroubleshootTabView: View {
     }
 
     private var problemSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionLabel("PROBLEM AND EVIDENCE")
+        VStack(alignment: .leading, spacing: 10) {
+            Text("What’s going wrong?").font(.system(size: 14, weight: .semibold))
+            Text("Include what you expected and what you’ve already tried.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
             TroubleshootProblemEditor(problem: entry(\.problem),
                                       attachments: entry(\.attachments),
-                                      focused: $problemFocused)
+                                      focused: $problemFocused,
+                                      isBrief: true)
         }
     }
 
-    private func optionsSection(_ session: ChatSession) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 18) {
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionLabel("ENVIRONMENT")
-                    TroubleshootEnvironmentPills(environment: entry(\.environment))
-                    if brief.environment.isDangerous { liveNotice }
+    private var optionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 20) {
+                    environmentField
+                    timeField.frame(minWidth: 220)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionLabel("MCP SERVERS")
-                    TroubleshootMCPOptions(agent: session.agent,
-                                           environment: brief.environment,
-                                           managedServers: configs.servers,
-                                           environmentServers: environmentMCPServers,
-                                           state: mcpConfigurationState(session),
-                                           enabled: entry(\.mcpServersEnabled))
+                VStack(alignment: .leading, spacing: 18) {
+                    environmentField
+                    timeField
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(15)
+            if brief.environment.isDangerous { liveNotice }
         }
-        .cardSurface(cornerRadius: 11)
+    }
+
+    private var environmentField: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Environment").font(.system(size: 14, weight: .semibold))
+            TroubleshootEnvironmentPills(environment: entry(\.environment))
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var timeField: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 5) {
+                Text("When did it happen?").fontWeight(.semibold)
+                Text("Optional").foregroundStyle(.secondary)
+            }
+            .font(.system(size: 12))
+            TextField("e.g. last 30 minutes, 14:00 UTC", text: entry(\.incidentTime))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(10)
+                .surface(Theme.field, cornerRadius: 8,
+                         border: timeFocused ? Theme.accent : Theme.border)
+                .focused($timeFocused)
+                .accessibilityLabel("When did it happen? Optional")
+                .accessibilityHint("Use your own words. No timezone is assumed.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // Named after the environment rather than after production, since a site file can
@@ -189,7 +246,7 @@ struct TroubleshootTabView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 11, weight: .semibold))
                 .padding(.top, 1)
-            Text("\(brief.environment.title) is live. The agent reads logs, metrics and config, and changes nothing.")
+            Text("\(brief.environment.title) is live. The brief instructs the agent to use read-only checks and make no changes.")
                 .font(.system(size: 12))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -202,7 +259,7 @@ struct TroubleshootTabView: View {
 
     private func skillsSection(_ session: ChatSession) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionLabel("SKILLS")
+            Text("Skills").font(.system(size: 14, weight: .semibold))
             TroubleshootSkillsBar(skills: skills, agent: session.agent,
                                   selected: $selectedSkills, showingSkills: $showingSkills)
         }
@@ -312,6 +369,7 @@ struct TroubleshootTabView: View {
 
             let request = TroubleshootRequest(
                 problem: sent.problem,
+                incidentTime: sent.incidentTime,
                 environment: chosenEnvironment,
                 projects: projects.map(\.name),
                 skills: chosenSkillNames,

@@ -29,15 +29,33 @@ enum WorkspaceRemoval {
     static func confirmation(for workspace: ProjectWorkspace, in store: ProjectStore,
                              onConfirm: @escaping () -> Void) -> Dialog {
         let sessions = store.sessions(in: workspace.id)
+        let count = sessions.count
         let designs = sessions.count { store.hasDesignArtifacts(for: $0) }
-        var message = "This drops \(counted(sessions.count, "session")) and removes their worktrees. The \(workspace.projectIDs.count) projects it groups stay."
-        if designs > 0 {
-            message += designs == 1
-                ? " One session contains generated Design files that are permanently removed."
-                : " \(designs) sessions contain generated Design files that are permanently removed."
+        let worktreeCount = sessions.reduce(0) {
+            $0 + store.checkoutProjects(for: $1).compactMap(\.worktreePath).count
         }
-        return .confirm("Delete \(workspace.name)?", message: message,
-                        action: "Delete workspace", handler: onConfirm)
+        let projectNames = workspace.projectIDs.compactMap { store.project($0)?.name }
+
+        var rows = [Dialog.Impact.Row(
+            title: "\(counted(count, "session")) and \(counted(worktreeCount, "worktree"))",
+            detail: count == 0 ? "No sessions or worktrees to remove."
+                : "Session history is removed from Code Station."
+                    + (worktreeCount > 0 ? " Worktrees are removed from disk." : ""))]
+        if designs > 0 {
+            rows.append(.init(title: "Generated Design files",
+                              detail: "Permanently removed from \(counted(designs, "session"))."))
+        }
+        rows.append(.init(title: projectNames.count == 1 ? "Its project stays" : "Its projects stay",
+                          detail: projectNames.isEmpty
+                              ? "Projects and their folders are not touched."
+                              : projectNames.joined(separator: ", "),
+                          kept: true))
+
+        return .impact("Delete \(workspace.name)?",
+                       message: "This workspace and its sessions will leave Code Station.",
+                       subject: .init(name: workspace.name, kind: .workspace),
+                       rows: rows, warning: count > 0 ? "Session history cannot be restored." : nil,
+                       action: "Delete workspace", handler: onConfirm)
     }
 
     // Sessions first, workspace last: a session that refuses to go keeps the workspace it

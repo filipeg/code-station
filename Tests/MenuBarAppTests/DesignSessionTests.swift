@@ -13,13 +13,6 @@ struct DesignSessionTests {
         project = try TestStore.project(in: store)
     }
 
-    @Test func designSplitKeepsBothPanesVisible() {
-        #expect(DesignSplitLayout.conversationWidth(340, availableWidth: 900) == 340)
-        #expect(DesignSplitLayout.conversationWidth(100, availableWidth: 900) == 280)
-        #expect(DesignSplitLayout.conversationWidth(800, availableWidth: 900) == 579)
-        #expect(DesignSplitLayout.conversationWidth(400, availableWidth: 500) == 249.5)
-    }
-
     @Test func designModeUsesTheSessionConversationAndCheckout() throws {
         let design = store.newSession(
             in: project.id,
@@ -303,6 +296,56 @@ struct DesignSessionTests {
         #expect(session.approvedDesignRevisionID == nil)
     }
 
+    @Test func aSavedVersionMatchesTheLiveCanvasUntilItChanges() throws {
+        let design = store.newSession(in: project.id, seed: .init(mode: .design))
+        let directory = try writeDesign(for: design, in: store, html: "<html>One</html>")
+        let prompt = UUID()
+
+        let saved = try store.saveDesignRevision(
+            design.id, screenshot: nil, sourceRevisions: [:], promptID: prompt).get()
+
+        #expect(saved.promptID == prompt)
+        #expect(DesignArtifacts.matchesLive(saved, designDirectory: directory))
+        try Data("<html>Two</html>".utf8)
+            .write(to: directory.appendingPathComponent("index.html"), options: .atomic)
+        #expect(!DesignArtifacts.matchesLive(saved, designDirectory: directory))
+    }
+
+    @Test func versionsKeepTheirPromptAcrossARestart() throws {
+        let design = store.newSession(in: project.id, seed: .init(mode: .design))
+        _ = try writeDesign(for: design, in: store, html: "<html>One</html>")
+        let prompt = UUID()
+        let saved = try store.saveDesignRevision(
+            design.id, screenshot: nil, sourceRevisions: [:], promptID: prompt).get()
+
+        let restored = ProjectStore(storeURL: store.storeURL)
+
+        #expect(restored.session(design.id)?.designRevisions.first { $0.id == saved.id }?.promptID
+                == prompt)
+    }
+
+    @Test func approvingASavedVersionDoesNotSaveItAgain() throws {
+        let design = store.newSession(in: project.id, seed: .init(mode: .design))
+        _ = try writeDesign(for: design, in: store, html: "<html>One</html>")
+        let saved = try store.saveDesignRevision(
+            design.id, screenshot: nil, sourceRevisions: [:]).get()
+
+        let approved = try store.approveDesignRevision(saved.id, for: design.id).get()
+
+        let session = try #require(store.session(design.id))
+        #expect(approved.id == saved.id)
+        #expect(session.designRevisions.map(\.id) == [saved.id])
+        #expect(session.approvedDesignRevisionID == saved.id)
+    }
+
+    @Test func approvingAMissingVersionFails() {
+        let design = store.newSession(in: project.id, seed: .init(mode: .design))
+        if case .success = store.approveDesignRevision(UUID(), for: design.id) {
+            Issue.record("Expected an unknown version to be refused")
+        }
+        #expect(store.session(design.id)?.approvedDesignRevisionID == nil)
+    }
+
     @Test func buildReceivesLaterRevisionsFromItsEditableDesign() throws {
         let original = store.newSession(in: project.id, seed: .init(mode: .design))
         _ = try writeDesign(for: original, in: store,
@@ -368,7 +411,7 @@ struct DesignSessionTests {
         _ = try store.beginImplementation(original.id, revisionID: revision.id).get()
         let build = try #require(store.session(original.id))
         let design = try #require(store.designSession(for: build.id))
-        let runner = SessionRunner(paths: [.codex: executable.path])
+        let runner = SessionRunner(persistentAgentSessions: false, paths: [.codex: executable.path])
         defer { runner.stopAll() }
 
         runner.send("Build the screen", sessionID: build.id, store: store)
@@ -513,6 +556,24 @@ struct DesignSessionTests {
             atPath: extracted.appendingPathComponent("__MACOSX").path))
     }
 
+    @Test func designArchiveCannotBeWrittenIntoItsSourceThroughALink() async throws {
+        let root = ScratchDirectory(prefix: "design-export-destination")
+        let materials = root.path("materials")
+        try FileManager.default.createDirectory(at: materials, withIntermediateDirectories: true)
+        try Data("<html>Design</html>".utf8)
+            .write(to: materials.appendingPathComponent("index.html"))
+        let alias = root.path("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: materials)
+
+        for destination in [materials, materials.appendingPathComponent("export.zip"),
+                            alias.appendingPathComponent("export.zip")] {
+            await #expect(throws: DesignMaterialExporter.ExportError.destinationInsideMaterials) {
+                try await DesignMaterialExporter.export(materialsAt: materials, to: destination)
+            }
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: materials.path) == ["index.html"])
+    }
+
     @Test func designMaterialArchiveNameIsPortable() {
         let name = DesignMaterialExporter.suggestedFileName(
             projectName: "Checkout/API", sessionTitle: "Landing:\nFirst pass")
@@ -557,6 +618,7 @@ struct DesignSessionTests {
         // Nothing else steers the look, so the aesthetic guidance travels with every
         // design turn rather than waiting on a skill the user may not have installed.
         #expect(prompt.contains("Generated design clusters around a few looks"))
+        #expect(prompt.contains("image generation tool"))
 
         let claude = SessionRunner.arguments(
             agent: .claudeCode,

@@ -24,8 +24,9 @@ struct NewWorkspaceSessionView: View {
     // say, then the same read again after a fetch, so the cards are honest immediately
     // and accurate a moment later.
     @State private var freshness: [UUID: GitFreshness.Report] = [:]
-    // One explicit start point per stale repository. Missing entries mean the checkout
-    // as it is, which is also the choice for repositories with nothing to reconcile.
+    // One start point per stale repository, the recommended one until the user picks
+    // another. Missing entries mean the checkout as it is, which is also the choice for
+    // repositories with nothing to reconcile.
     @State private var startPoints: [UUID: SessionStartPoint] = [:]
     @State private var chosenStartPoints: Set<UUID> = []
     // Fetch passes still running, which hold the footer's button.
@@ -45,7 +46,7 @@ struct NewWorkspaceSessionView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("New session in \(workspace.name)")
-                    .font(.serif(21, .semibold))
+                    .font(.serif(22, .semibold))
                 Text("The lead project is the agent's working directory. Attached projects are available to the same conversation.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
@@ -56,33 +57,37 @@ struct NewWorkspaceSessionView: View {
 
             ScrollView {
                 VStack(spacing: 10) {
+                    HStack {
+                        Text("Projects · \(projectIDs.count)")
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        if !attachableProjects.isEmpty {
+                            Label("Attach a project", systemImage: "plus")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
+                                .appMenu { attachMenu }
+                        }
+                    }
                     ForEach(projectIDs, id: \.self) { id in
                         if let project = store.project(id) {
                             projectCard(project, lead: id == workspace.leadProjectID)
                         }
                     }
 
-                    if !attachableProjects.isEmpty {
-                        HStack(spacing: 8) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .bold))
-                            Text("Attach a project")
-                                .font(.system(size: 13, weight: .semibold))
-                            Spacer()
-                            Text(attachableProjects.map(\.name).joined(separator: " · "))
-                                .font(.mono(11))
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-                        .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 14)
-                        .frame(height: 44)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
-                        .overlay(RoundedRectangle(cornerRadius: 10)
-                            .stroke(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                        .contentShape(Rectangle())
-                        .appMenu { attachMenu }
-                    }
+                    SessionCheckoutPaths(entries: projectIDs.compactMap { id in
+                        guard let project = store.project(id) else { return nil }
+                        let usesWorktree = project.isGitRepository && worktrees.contains(id)
+                        let plan = GitWorktree.plan(projectName: project.name, projectID: id,
+                                                    sessionID: sessionID)
+                        return .init(name: project.name,
+                                     branch: usesWorktree ? plan.branch : GitHead.branch(at: project.path),
+                                     path: usesWorktree ? plan.path.abbreviatedPath : project.collapsedPath)
+                    })
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Worktrees are isolated checkouts. Deleting this session removes its worktrees.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
@@ -99,7 +104,7 @@ struct NewWorkspaceSessionView: View {
                              create: create,
                              dismiss: { dismiss() })
         }
-        .frame(width: 680)
+        .frame(width: 780)
         .background(Theme.background)
         .disabled(pulling)
         .interactiveDismissDisabled(pulling)
@@ -119,10 +124,7 @@ struct NewWorkspaceSessionView: View {
             await GitFreshness.checkAll(repositories, fetch: fetch) { id, report in
                 withAnimation(.easeOut(duration: 0.2)) {
                     freshness[id] = report
-                    if fetch, report.defaultBranchHasDiverged,
-                       worktrees.contains(id), !chosenStartPoints.contains(id) {
-                        startPoints[id] = .remote
-                    }
+                    selectRecommendedStartPoint(for: id)
                 }
             }
         }
@@ -131,70 +133,27 @@ struct NewWorkspaceSessionView: View {
     private func projectCard(_ project: Project, lead: Bool) -> some View {
         let supportsWorktree = project.isGitRepository
         let usesWorktree = supportsWorktree && worktrees.contains(project.id)
-        let checkout = GitWorktree.plan(projectName: project.name, projectID: project.id,
-                                        sessionID: sessionID)
-        let tint = Theme.projectTint(for: project.name)
-
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                ProjectDot(tint: tint, size: 10)
-                Text(project.name)
-                    .font(.system(size: 15, weight: .semibold))
-                    .lineLimit(1)
-                MonoChip(text: lead ? "LEAD" : "ATTACHED", size: 9.5,
-                         tint: lead ? Theme.accent : tint.colour)
-                Spacer(minLength: 8)
-                Text(project.collapsedPath)
-                    .font(.mono(11))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if !lead {
-                    Button { detach(project.id) } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .hoverLift(amount: Motion.smallLift)
-                    .appTooltip("Detach from this session")
+        return SessionProjectCard(
+            project: project, lead: lead, usesWorktree: usesWorktree,
+            report: freshness[project.id], startPoint: startPoint(project.id),
+            selectWorktree: {
+                worktrees.insert(project.id)
+                selectRecommendedStartPoint(for: project.id)
+            },
+            selectProjectFolder: {
+                worktrees.remove(project.id)
+                selectRecommendedStartPoint(for: project.id)
+                if startPoints[project.id] == .remote {
+                    startPoints[project.id] = .currentCheckout
                 }
-            }
+            },
+            onChoose: { chosenStartPoints.insert(project.id) },
+            detach: lead ? nil : { detach(project.id) })
+    }
 
-            CheckoutModePicker(
-                usesWorktree: usesWorktree,
-                supportsWorktree: supportsWorktree,
-                branch: usesWorktree ? checkout.branch : GitHead.branch(at: project.path),
-                path: usesWorktree ? checkout.path.abbreviatedPath : project.collapsedPath,
-                selectWorktree: {
-                    worktrees.insert(project.id)
-                    if let report = freshness[project.id], report.defaultBranchHasDiverged,
-                       !chosenStartPoints.contains(project.id) {
-                        startPoints[project.id] = .remote
-                    }
-                },
-                selectProjectFolder: {
-                    worktrees.remove(project.id)
-                    if startPoints[project.id] == .remote {
-                        startPoints[project.id] = .currentCheckout
-                    }
-                })
-
-            if let report = freshness[project.id],
-               report.isStale || (usesWorktree && report.dirty) {
-                FreshnessNotice(report: report, forWorktree: usesWorktree,
-                                startPoint: startPoint(project.id)) {
-                    chosenStartPoints.insert(project.id)
-                }
-                .transition(.fadeIn)
-            }
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 12)
-            .stroke(lead ? Theme.accent : Theme.border, lineWidth: lead ? 1.5 : 1))
+    private func selectRecommendedStartPoint(for id: UUID) {
+        guard let report = freshness[id], !chosenStartPoints.contains(id) else { return }
+        startPoints[id] = .recommended(for: report, worktree: worktrees.contains(id))
     }
 
     private func startPoint(_ id: UUID) -> Binding<SessionStartPoint> {
@@ -203,7 +162,12 @@ struct NewWorkspaceSessionView: View {
     }
 
     private var footerNote: String {
-        "Deleting the session removes all of its worktrees together."
+        let updates = projectIDs.filter {
+            startPoints[$0] == .updateCheckout && freshness[$0]?.canUpdateCheckout == true
+        }.count
+        let trees = gitProjects.filter { worktrees.contains($0.id) }.count
+        let impact = SessionCreationImpact(updates: updates, worktrees: trees).text
+        return hasEnoughProjects ? impact : "Attach at least two projects to create a workspace session. " + impact
     }
 
     // A workspace session is a conversation across projects, so it needs at least two.

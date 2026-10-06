@@ -114,4 +114,57 @@ struct SavedRequestFolderTests {
         #expect(store.requests.map(\.name) == ["Second"])
         #expect(store.selected == nil)
     }
+
+    @Test @MainActor func reorderingPlacesARequestBesideAnotherAndTakesItsFolder() throws {
+        try JSONEncoder().encode(SavedRequestCollection()).write(to: file)
+
+        let store = DispatchStore(storeURL: file, siteDefaults: SiteDefaults())
+        let first = store.add(SavedRequest(name: "First"))
+        let second = store.add(SavedRequest(name: "Second"))
+        let third = store.add(SavedRequest(name: "Third"))
+        let folder = store.addFolder(named: "Payments")
+        let other = store.add(SavedRequest(name: "Other"), to: folder.id)
+
+        store.move(third.id, beside: first.id, after: false)
+        #expect(store.requests(in: RequestFolder.defaultID).map(\.name) == ["Third", "First", "Second"])
+
+        store.move(third.id, beside: second.id, after: true)
+        #expect(store.requests(in: RequestFolder.defaultID).map(\.name) == ["First", "Second", "Third"])
+
+        store.move(first.id, beside: other.id, after: false)
+        #expect(store.requests(in: folder.id).map(\.name) == ["First", "Other"])
+        #expect(store.requests(in: RequestFolder.defaultID).map(\.name) == ["Second", "Third"])
+
+        let saved = try JSONDecoder().decode(SavedRequestCollection.self,
+                                              from: Data(contentsOf: file))
+        #expect(saved.requests.map(\.name) == ["Second", "Third", "First", "Other"])
+    }
+
+    @Test @MainActor func movingIntoAFolderPutsTheRequestLast() throws {
+        try JSONEncoder().encode(SavedRequestCollection()).write(to: file)
+
+        let store = DispatchStore(storeURL: file, siteDefaults: SiteDefaults())
+        let moved = store.add(SavedRequest(name: "Moved"))
+        let folder = store.addFolder(named: "Payments")
+        store.add(SavedRequest(name: "Already there"), to: folder.id)
+
+        store.move(moved.id, to: folder.id)
+
+        #expect(store.requests(in: folder.id).map(\.name) == ["Already there", "Moved"])
+    }
+
+    @Test @MainActor func renamingTrimsTheNameAndIgnoresABlankOne() throws {
+        try JSONEncoder().encode(SavedRequestCollection()).write(to: file)
+
+        let store = DispatchStore(storeURL: file, siteDefaults: SiteDefaults())
+        let request = store.add(SavedRequest(name: "Old"))
+
+        store.rename(request.id, to: "  Create payment  ")
+        store.rename(request.id, to: "   ")
+
+        #expect(store.requests[0].name == "Create payment")
+        let saved = try JSONDecoder().decode(SavedRequestCollection.self,
+                                              from: Data(contentsOf: file))
+        #expect(saved.requests[0].name == "Create payment")
+    }
 }

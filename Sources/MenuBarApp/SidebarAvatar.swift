@@ -158,8 +158,22 @@ struct SidebarIdentityTile: View {
     // The rail draws these at one size; a preview of the icon style borrows the same tile
     // at whatever size the preview has room for.
     var side: CGFloat = 26
+    var pinned = false
 
+    // The pin sits on the tile rather than after the name, so a long name keeps its full
+    // width. It is decoration: the row says "Pinned" to VoiceOver itself.
     var body: some View {
+        artwork
+            .overlay(alignment: .bottomTrailing) {
+                if pinned {
+                    TilePinBadge()
+                        .offset(x: 5, y: 4)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var artwork: some View {
         switch appSettings.sidebarIconSet {
         case .monograms:
             fallback
@@ -187,6 +201,19 @@ struct SidebarIdentityTile: View {
 
     private var fallback: some View {
         ProjectTileView(name: name, tint: tint, side: side, dashed: dashed, stacked: stacked)
+    }
+}
+
+private struct TilePinBadge: View {
+    var body: some View {
+        Image(systemName: "pin.fill")
+            .font(.system(size: 7.5, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 14, height: 14)
+            .background(Circle().fill(Theme.accentFill))
+            .background(Circle().fill(Theme.sidebar).padding(-1.5))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

@@ -166,6 +166,11 @@ enum TaskTemplate {
         .joined(separator: " · ")
     }
 
+    // Where each hole sits in the prompt, braces included, for the editor to colour.
+    static func holeRanges(in prompt: String) -> [NSRange] {
+        holes(in: prompt).map { NSRange($0.range, in: prompt) }
+    }
+
     // MARK: - Scanning
 
     // Every hole in the text: the range it spans, braces included, and the name inside.

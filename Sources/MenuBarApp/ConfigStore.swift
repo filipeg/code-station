@@ -260,7 +260,7 @@ final class ConfigStore {
             }
         }
         servers.sort { $0.name < $1.name }
-        selectedID = entries.keys.sorted().first
+        selectedID = entries.keys.min()
         save()
         return entries.count
     }

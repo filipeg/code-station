@@ -58,6 +58,46 @@ struct PromptSuggestionTests {
         #expect(!tail.contains(String(repeating: "a", count: 2_001)))
         #expect(!tail.contains(String(repeating: "b", count: 2_001)))
     }
+
+    @Test(arguments: [AgentKind.claudeCode, .codex, .copilot], [0, 7])
+    func readsTheLastLineOnlyWhenTheCommandSucceeds(agent: AgentKind, status: Int) async throws {
+        let scratch = ScratchDirectory(prefix: "prompt-suggestion")
+        let executable = scratch.path("agent")
+        let message = switch agent {
+        case .claudeCode:
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Run the tests"}]}}"#
+        case .codex:
+            #"{"type":"item.completed","item":{"id":"answer","type":"agent_message","text":"Run the tests"}}"#
+        case .copilot:
+            #"{"type":"assistant.message","data":{"messageId":"answer","content":"Run the tests"}}"#
+        }
+        try FixtureCLI.write("""
+            cat >/dev/null
+            printf '%s' '\(message)'
+            exit \(status)
+            """, to: executable)
+
+        let suggestion = await PromptSuggestion.read(
+            agent: agent, at: executable.path, searchPath: "/usr/bin:/bin",
+            workingDirectory: scratch.url.path, prompt: "Suggest the next prompt")
+
+        #expect(suggestion == (status == 0 ? "Run the tests" : nil))
+    }
+
+    @Test func dropsTruncatedOutput() async throws {
+        let scratch = ScratchDirectory(prefix: "prompt-suggestion")
+        let executable = scratch.path("agent")
+        try FixtureCLI.write("""
+            printf '%s\\n' '{"type":"item.completed","item":{"id":"answer","type":"agent_message","text":"Run the tests"}}'
+            yes output | head -c 262144
+            """, to: executable)
+
+        let suggestion = await PromptSuggestion.read(
+            agent: .codex, at: executable.path, searchPath: "/usr/bin:/bin",
+            workingDirectory: scratch.url.path, prompt: "Suggest the next prompt")
+
+        #expect(suggestion == nil)
+    }
 }
 
 @MainActor
@@ -108,6 +148,21 @@ struct PromptSuggestionRunnerTests {
         #expect(harness.store.transcript(of: harness.session.id).map(\.text)
             == ["Fix the login retry", "Work complete"])
         #expect(try Self.starts(harness) == "work\nsuggest\n")
+    }
+
+    @Test func codexSuggestionsUseTheSessionModel() async throws {
+        let harness = try RunnerHarness(agent: .codex, script: Self.script(.codex),
+                                        promptSuggestionsEnabled: { true })
+        defer { harness.tearDown() }
+        harness.store.setSettings(SessionSettings(model: "gpt-5.6-sol"),
+                                  for: harness.session.id)
+        harness.runner.send("Fix the login retry", sessionID: harness.session.id,
+                            store: harness.store)
+        #expect(await waitUntil { harness.runner.suggestion(harness.session.id) != nil })
+        let arguments = try String(contentsOf: harness.scratch.path("suggestion-arguments"),
+                                   encoding: .utf8).split(separator: "\n").map(String.init)
+        let modelFlag = try #require(arguments.firstIndex(of: "-m"))
+        #expect(arguments[modelFlag + 1] == "gpt-5.6-sol")
     }
 
     @Test func sendsTheSuggestionAsItsOwnTurnAndLeavesTheRestOfTheDraftAlone() async throws {
@@ -184,7 +239,7 @@ struct PromptSuggestionRunnerTests {
     private static func script(_ agent: AgentKind) -> String {
         let read = switch agent {
         case .claudeCode: "IFS= read -r input"
-        case .codex: "input=$(cat)"
+        case .codex: ""
         case .copilot: "input=\"$*\""
         }
         let turn = switch agent {
@@ -225,11 +280,13 @@ struct PromptSuggestionRunnerTests {
             printf '%s\\n' '{"type":"result","sessionId":"copilot-1","exitCode":0}'
             """
         }
-        // Every CLI is asked for a suggestion through its arguments, so the marker is
-        // looked for there whatever the turn itself is given on stdin.
+        // Codex drains stdin even when the prompt is an argument. An open input pipe
+        // would keep it from reaching the suggestion request.
         return """
+        \(agent == .codex ? "input=$(cat)" : "")
         case "$*" in
             *'Return only the prompt.'*)
+                printf '%s\\n' "$@" > "$folder/suggestion-arguments"
                 printf 'suggest\\n' >> "$folder/starts"
                 \(suggestion)
                 exit 0

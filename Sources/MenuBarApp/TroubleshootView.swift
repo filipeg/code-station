@@ -49,6 +49,7 @@ struct TroubleshootEnvironment: Identifiable, Equatable, Sendable {
 
 struct TroubleshootRequest {
     let problem: String
+    let incidentTime: String
     let environment: TroubleshootEnvironment
     let projects: [String]
     let skills: [String]
@@ -56,10 +57,11 @@ struct TroubleshootRequest {
     let mcpServerNames: [String]
     let agent: AgentKind
 
-    init(problem: String, environment: TroubleshootEnvironment, projects: [String],
+    init(problem: String, incidentTime: String = "", environment: TroubleshootEnvironment, projects: [String],
          skills: [String] = [], mcpServersEnabled: Bool, mcpServerNames: [String] = [],
          agent: AgentKind) {
         self.problem = problem
+        self.incidentTime = incidentTime
         self.environment = environment
         self.projects = projects
         self.skills = skills
@@ -69,9 +71,11 @@ struct TroubleshootRequest {
     }
 
     var userInput: String {
-        problem.isBlank
+        let description = problem.isBlank
             ? "Troubleshoot the problem shown in the attached files."
             : problem.trimmed
+        guard !incidentTime.isBlank else { return description }
+        return description + "\n\nIncident time window (as supplied): " + incidentTime.trimmed
     }
 
     var customInstructions: String {

@@ -21,6 +21,7 @@ struct Composer<Above: View, Accessory: View>: View {
     let placeholder: String
     // The side margin, which the narrow Design pane keeps smaller.
     var inset: CGFloat = 20
+    var minimumLines: Int = 1
     let onOversizedPaste: (String) -> Void
     var onRecallUp: (() -> Bool)? = nil
     var onRecallDown: (() -> Bool)? = nil
@@ -57,6 +58,7 @@ struct Composer<Above: View, Accessory: View>: View {
         let state = runner.state(sessionID)
         let busy = state.isBusy
         let canSend = !blocked && !runner.draft(sessionID).isEmpty
+        let roots = store.session(sessionID).map(store.workingDirectories(for:)) ?? []
 
         let matches = matches
 
@@ -86,8 +88,10 @@ struct Composer<Above: View, Accessory: View>: View {
                               onRecallUp: onRecallUp,
                               onRecallDown: onRecallDown,
                               highlightsKeyword: agent == .claudeCode,
+                              commandNames: Set(commands.map { $0.name.lowercased() }),
                               onSuggestionKey: onSuggestionKey,
-                              onCommandKey: commandKey) {
+                              onCommandKey: commandKey,
+                              minimumLines: minimumLines) {
                     accessory
                 }
 
@@ -102,6 +106,7 @@ struct Composer<Above: View, Accessory: View>: View {
                     }
                     .buttonStyle(.plain)
                     .hoverLift(amount: Motion.smallLift)
+                    .accessibilityLabel(busy ? "Queue prompt" : "Send prompt")
                     .appTooltip(busy ? "Queue this for when the turn ends"
                                      : "Send (shift-return for a new line)")
                     .transition(.fadeIn)
@@ -125,6 +130,7 @@ struct Composer<Above: View, Accessory: View>: View {
                     }
                     .buttonStyle(.plain)
                     .hoverLift(amount: Motion.smallLift)
+                    .accessibilityLabel("Stop this turn")
                     .appTooltip("Stop this turn (esc)")
                 } else if !canSend {
                     // The button keeps its place so the field does not change width as
@@ -144,15 +150,15 @@ struct Composer<Above: View, Accessory: View>: View {
         .overlay(RoundedRectangle(cornerRadius: 10)
             .stroke(Theme.accent, lineWidth: dropTargeted ? 2 : 0)
             .padding(6))
-        // Read again each time the menu opens rather than once: a command is a file
-        // someone can add, edit or delete between one prompt and the next.
-        .task(id: query == nil) {
-            guard query != nil else { return }
-            let roots = store.session(sessionID).map(store.workingDirectories(for:)) ?? []
+        // Saved drafts need the command names too. Refresh as the menu opens or closes,
+        // since command files can change between prompts.
+        .task(id: [agent.rawValue, String(query == nil)] + roots) {
             let agent = agent
-            commands = await Task.detached {
+            let loaded = await Task.detached {
                 AgentCommands.all(for: agent, workingDirectories: roots)
             }.value
+            guard !Task.isCancelled else { return }
+            commands = loaded
         }
         .onChange(of: query) { _, typed in
             commandSelection = 0

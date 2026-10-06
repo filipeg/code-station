@@ -109,6 +109,9 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
     // in the transcript; this is kept so the run list can say what each run was about
     // without opening it.
     var taskValues: [String: String]?
+    // Whether a task's schedule started this run rather than a person, which is how the
+    // run list tells the two apart.
+    var isScheduledRun = false
     // A short account generated after an unseen turn, or when the person asks for one.
     // It stays outside the transcript because the request is an app action rather than a
     // new instruction for the coding task.
@@ -150,6 +153,7 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
     // with the task. The description is the fallback: a task is named after the very line
     // the call was given, so the newest shell call carrying that line is the one meant.
     func shellCommand(for task: BackgroundTask) -> String? {
+        if let command = task.command, !command.isBlank { return command }
         if let toolUseID = task.toolUseID,
            let command = shellCommand(matching: { $0.id == toolUseID }) {
             return command
@@ -226,7 +230,7 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
         case workspaceID, sessionProjects, settings, usage, agentAvatarName
         // `pullRequest` is only read: a file written when a session could hold one
         // pull request keeps it under that key.
-        case pullRequest, pullRequests, taskValues, recap, summary, messages
+        case pullRequest, pullRequests, taskValues, isScheduledRun, recap, summary, messages
     }
 
     init(id: UUID = UUID(), projectID: UUID, agent: AgentKind = .claudeCode) {
@@ -273,6 +277,8 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
             ?? (try container.decodeIfPresent(PullRequest.self, forKey: .pullRequest)).map { [$0] }
             ?? []
         taskValues = try container.decodeIfPresent([String: String].self, forKey: .taskValues)
+        isScheduledRun = try container.decodeIfPresent(Bool.self, forKey: .isScheduledRun)
+            ?? false
         recap = try container.decodeIfPresent(SessionRecap.self, forKey: .recap)
         summary = try container.decodeIfPresent(SessionSummary.self, forKey: .summary) ?? SessionSummary()
         messages = try container.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
@@ -320,6 +326,7 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
             try container.encode(pullRequests, forKey: .pullRequests)
         }
         try container.encodeIfPresent(taskValues, forKey: .taskValues)
+        if isScheduledRun { try container.encode(isScheduledRun, forKey: .isScheduledRun) }
         try container.encodeIfPresent(recap, forKey: .recap)
         try container.encode(summary, forKey: .summary)
     }

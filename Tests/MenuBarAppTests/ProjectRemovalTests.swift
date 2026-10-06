@@ -25,7 +25,9 @@ struct ProjectRemovalTests {
         let dialog = ProjectRemoval.confirmation(for: project, in: store) {}
 
         #expect(dialog.title == "Remove checkout?")
-        #expect(dialog.message?.contains("The folder itself stays on disk") == true)
+        #expect(dialog.impact?.rows.last?.title == "Original project folder stays")
+        #expect(dialog.impact?.rows.last?.detail == project.collapsedPath)
+        #expect(dialog.impact?.rows.last?.kept == true)
         #expect(dialog.actions.first?.label == "Remove project")
         #expect(dialog.actions.first?.kind == .destructive)
         #expect(dialog.actions.last?.kind == .cancel)
@@ -41,8 +43,9 @@ struct ProjectRemovalTests {
 
         let dialog = ProjectRemoval.confirmation(for: project, in: store) {}
 
-        #expect(dialog.message?.contains(
-            "One session contains generated Design files that are permanently removed") == true)
+        #expect(dialog.impact?.rows.contains {
+            $0.title == "Generated Design files" && $0.detail == "Permanently removed from 1 session."
+        } == true)
     }
 
     @Test func saysThatATaskFolderGoesWithTheTask() throws {
@@ -52,7 +55,10 @@ struct ProjectRemovalTests {
         let dialog = ProjectRemoval.confirmation(for: task, in: store) {}
 
         #expect(dialog.title == "Delete Sweep?")
-        #expect(dialog.message?.contains("deletes the task's folder") == true)
+        #expect(dialog.impact?.subject?.kind == .task)
+        #expect(dialog.impact?.rows.last?.title == "Task folder")
+        #expect(dialog.impact?.rows.last?.kept == false)
+        #expect(dialog.impact?.warning != nil)
         #expect(dialog.actions.first?.label == "Delete task")
     }
 
@@ -62,15 +68,15 @@ struct ProjectRemovalTests {
         let task = try store.addTask(named: "Sweep", prompt: "Do the thing.",
                                      in: scratch.path("tasks")).get()
         #expect(ProjectRemoval.confirmation(for: task, in: store) {}
-            .message?.contains("This drops its 0 runs") == true)
+            .impact?.rows.first?.title == "0 runs")
 
         _ = store.newSession(in: task.id)
         #expect(ProjectRemoval.confirmation(for: task, in: store) {}
-            .message?.contains("This drops its 1 run and") == true)
+            .impact?.rows.first?.title == "1 run")
 
         _ = store.newSession(in: task.id)
         #expect(ProjectRemoval.confirmation(for: task, in: store) {}
-            .message?.contains("This drops its 2 runs and") == true)
+            .impact?.rows.first?.title == "2 runs")
     }
 
     // A count that reads "1 sessions" is the kind of thing that survives a rewrite in one
@@ -78,15 +84,15 @@ struct ProjectRemovalTests {
     @Test func countsTheSessionsThatWouldGoInWords() throws {
         let project = try addProject(named: "checkout")
         #expect(ProjectRemoval.confirmation(for: project, in: store) {}
-            .message?.contains("This drops 0 sessions") == true)
+            .impact?.rows.first?.title == "0 sessions and 0 worktrees")
 
         _ = try store.insertSession(in: project.id).get()
         #expect(ProjectRemoval.confirmation(for: project, in: store) {}
-            .message?.contains("This drops 1 session that") == true)
+            .impact?.rows.first?.title == "1 session and 0 worktrees")
 
         _ = try store.insertSession(in: project.id).get()
         #expect(ProjectRemoval.confirmation(for: project, in: store) {}
-            .message?.contains("This drops 2 sessions that") == true)
+            .impact?.rows.first?.title == "2 sessions and 0 worktrees")
     }
 
     // A workspace session dies with any one of its repositories, so it counts against
@@ -105,7 +111,35 @@ struct ProjectRemovalTests {
                                       worktreeBranch: nil)]).get()
 
         #expect(ProjectRemoval.confirmation(for: second, in: store) {}
-            .message?.contains("This drops 1 session that") == true)
+            .impact?.rows.first?.title == "1 session and 0 worktrees")
+    }
+
+    @Test func summaryCountsWorktreesAcrossRepositoriesAndOnlyOwnedShortcuts() throws {
+        let first = try addProject(named: "first")
+        let second = try addProject(named: "second")
+        let workspace = try #require(store.addWorkspace(name: "Checkout",
+                                                        projectIDs: [first.id, second.id],
+                                                        leadProjectID: first.id))
+        _ = try store.insertSession(in: workspace.id, projects: [
+            SessionProject(projectID: first.id, worktreePath: "/worktrees/first", worktreeBranch: "topic"),
+            SessionProject(projectID: second.id, worktreePath: "/worktrees/second", worktreeBranch: "topic")
+        ]).get()
+        shortcuts.add(name: "Build", text: "make", projectID: first.id)
+        shortcuts.add(name: "Other", text: "make", projectID: second.id)
+
+        let dialog = ProjectRemoval.confirmation(for: first, in: store, shortcuts: shortcuts) {}
+
+        #expect(dialog.impact?.rows.first?.title == "1 session and 2 worktrees")
+        #expect(dialog.impact?.rows.contains { $0.title == "1 saved shortcut" } == true)
+        #expect(dialog.impact?.rows.contains { $0.title == "Generated Design files" } == false)
+        #expect(dialog.impact?.warning == "Session history cannot be restored.")
+    }
+
+    @Test func emptyProjectHasNoHistoryWarning() throws {
+        let project = try addProject(named: "empty")
+        let dialog = ProjectRemoval.confirmation(for: project, in: store, shortcuts: shortcuts) {}
+        #expect(dialog.impact?.warning == nil)
+        #expect(dialog.impact?.rows.count == 2)
     }
 
     // MARK: - The order the work happens in

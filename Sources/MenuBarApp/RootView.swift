@@ -231,6 +231,7 @@ struct RootView: View {
                 settings.completeOnboarding()
                 self.sheet = nil
             }
+            .environment(\.textScale, settings.textSize.scale)
         }
     }
 
@@ -512,7 +513,7 @@ private struct AppUpdateRestartPrompt: View {
     }
 
     private var message: String {
-        let busy = store.sessions.filter { runner.state($0.id).isBusy }.count
+        let busy = store.sessions.count { runner.state($0.id).isBusy }
         guard busy > 0 else { return "Restarting the app finishes the update." }
         return "Restarting the app finishes the update and stops "
             + "\(counted(busy, "session")) still running."

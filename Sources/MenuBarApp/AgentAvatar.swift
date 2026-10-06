@@ -378,13 +378,15 @@ struct SessionBotPicker: View {
     @Binding var selectedName: String
     let sessionID: UUID?
     let size: CGFloat
+    var showsName = false
 
     init(avatars: [AgentAvatar], selectedName: Binding<String>,
-         sessionID: UUID? = nil, size: CGFloat = 30) {
+         sessionID: UUID? = nil, size: CGFloat = 30, showsName: Bool = false) {
         self.avatars = avatars
         _selectedName = selectedName
         self.sessionID = sessionID
         self.size = size
+        self.showsName = showsName
     }
 
     private var selectedAvatar: AgentAvatar {
@@ -396,20 +398,36 @@ struct SessionBotPicker: View {
     }
 
     var body: some View {
-        selectedImage
-            .overlay(alignment: .bottomTrailing) {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: size * 0.22, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: size * 0.4, height: size * 0.4)
-                    .background(Circle().fill(Theme.accentFill))
-                    .overlay(Circle().stroke(Theme.card, lineWidth: size * 0.05))
-            }
-            .frame(width: max(size, 32), height: max(size, 32))
+        label
             .contentShape(Rectangle())
             .appMenu(edge: .top) { menu }
             .appTooltip("Choose bot: \(title)")
             .accessibilityLabel("Choose bot, \(title) selected")
+    }
+
+    @ViewBuilder private var label: some View {
+        if showsName {
+            HStack(spacing: 8) {
+                selectedImage
+                Text(title).font(.system(size: 12))
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 38)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+        } else {
+            selectedImage
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: size * 0.22, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: size * 0.4, height: size * 0.4)
+                        .background(Circle().fill(Theme.accentFill))
+                        .overlay(Circle().stroke(Theme.card, lineWidth: size * 0.05))
+                }
+                .frame(width: max(size, 32), height: max(size, 32))
+        }
     }
 
     private var selectedImage: some View {

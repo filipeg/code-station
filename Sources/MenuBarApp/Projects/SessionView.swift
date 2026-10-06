@@ -205,6 +205,12 @@ struct SessionView: View {
         case .design:
             _tab = State(initialValue: .design)
             _requestedChange = State(initialValue: nil)
+        case .troubleshoot:
+            _tab = State(initialValue: .troubleshoot)
+            _requestedChange = State(initialValue: nil)
+        case .explorer:
+            _tab = State(initialValue: .explorer)
+            _requestedChange = State(initialValue: nil)
         case .changes:
             _tab = State(initialValue: .changes)
             _requestedChange = State(initialValue: nil)
@@ -264,8 +270,8 @@ struct SessionView: View {
                     TroubleshootTabView(sessionID: session.id) { tab = .conversation }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .changes:
-                    ChangesView(root: requestedChange?.root ?? projectDirectory,
-                                initiallySelectedPath: requestedChange?.path)
+                    WorkspaceChangesView(session: session, initialRoot: requestedChange?.root ?? projectDirectory,
+                                         initialPath: requestedChange?.path)
                         .id(requestedChange)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .explorer:
@@ -322,6 +328,9 @@ struct SessionView: View {
             }
             .onChange(of: terminalFocused) { _, focused in
                 if focused { composerFocused = false }
+            }
+            .onChange(of: tab, initial: true) {
+                store.noteSessionTab(openedDestination, for: sessionID)
             }
             .task(id: sessionID) {
                 selectedProjectID = requestedChange.flatMap { change in
@@ -512,6 +521,7 @@ struct SessionView: View {
             SessionFactsChip(
                 facts: facts,
                 maxWidth: fit == .whole ? Self.branchRoom : Self.foldedBranchRoom,
+                showsBranch: tab != .changes,
                 openChanges: openChanges,
                 contextActions: contextActions,
                 usageTooltip: {
@@ -598,8 +608,7 @@ struct SessionView: View {
             // says which of them the menu names first.
             HeaderRailButton(icon: "terminal",
                              state: terminalOpen ? .open : .rest,
-                             label: "Open a shell",
-                             hint: "Here or in \(SystemTerminal.appName)")
+                             label: "Open a shell here or in \(SystemTerminal.appName)")
                 .appMenu {
                     terminalEntries(isOpen: terminalOpen,
                                     toggle: { toggleTerminal(directory: directory) },
@@ -770,6 +779,16 @@ struct SessionView: View {
     private func destination(_ label: String, icon: String, value: Tab) -> HeaderTab {
         HeaderTab(label: label, icon: icon, selected: tab == value) {
             tab = value
+        }
+    }
+
+    private var openedDestination: SessionDestination {
+        switch tab {
+        case .conversation: .conversation
+        case .design: .design
+        case .troubleshoot: .troubleshoot
+        case .changes: requestedChange.map { .change(root: $0.root, path: $0.path) } ?? .changes
+        case .explorer: .explorer
         }
     }
 
@@ -970,8 +989,7 @@ struct SessionView: View {
 
     private func showsDirectoryBar(for session: ChatSession, designFilesURL: URL?) -> Bool {
         switch tab {
-        case .conversation, .design, .troubleshoot: false
-        case .changes: store.checkoutProjects(for: session).count > 1
+        case .conversation, .design, .troubleshoot, .changes: false
         case .explorer:
             designFilesURL != nil || store.checkoutProjects(for: session).count > 1
         }
@@ -980,7 +998,7 @@ struct SessionView: View {
     private func sessionDirectoryBar(_ session: ChatSession, designFilesURL: URL?) -> some View {
         ScrollView(.horizontal) {
             HStack(spacing: 6) {
-                if tab == .explorer, designFilesURL != nil {
+                if designFilesURL != nil {
                     Button { explorerShowsDesignFiles = true } label: {
                         HStack(spacing: 7) {
                             Image(systemName: "paintbrush.pointed.fill")
@@ -1009,11 +1027,11 @@ struct SessionView: View {
                         let root = checkout.worktreePath ?? project.path
                         let snapshot = gitStats.snapshot(at: root)
                         let selected = selectedProjectID == project.id
-                            && (tab == .changes || !explorerShowsDesignFiles)
+                            && !explorerShowsDesignFiles
                         Button {
                             selectedProjectID = project.id
                             requestedChange = nil
-                            if tab == .explorer { explorerShowsDesignFiles = false }
+                            explorerShowsDesignFiles = false
                         } label: {
                             HStack(spacing: 7) {
                                 RoundedRectangle(cornerRadius: 3)
@@ -1657,6 +1675,9 @@ struct SessionView: View {
 
             TurnEndActions(sessionID: sessionID, state: state)
         }
+        .modifier(SentPromptCommands(agent: session.agent,
+                                     workingDirectories: store.workingDirectories(for: session),
+                                     latestPromptID: session.messages.last(where: { $0.role == .user })?.id))
     }
 
     // What to do with what the turn left behind. It sits at the end of the conversation

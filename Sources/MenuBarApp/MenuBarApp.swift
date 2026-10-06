@@ -24,7 +24,7 @@ enum MenuBarApp {
 // `Window` scene, because openWindow(id:) does not reliably re-show a singleton
 // window once it has been closed. An AppKit window we own always comes back.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let store = ConfigStore()
     private let processes = ProcessManager()
     private let claude = ClaudeCodeManager()
@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let orphanedWorktrees = OrphanedWorktreeMonitor()
     private let gitStats = GitStatsCache()
     private let terminals = TerminalStore()
+    private let explorerMemory = ExplorerMemory()
     private let loginItem = LoginItem()
     // Reached from the main menu as well as the window, so the text size items can
     // change the same setting the Settings sheet shows.
@@ -70,7 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // needs somewhere to show that the run it belonged to ended here.
         SessionLog.note("app launched")
         SessionLog.startMemoryMonitoring()
-        closeShellsLeftBehind()
+        RunRegistry.shared.record(RunRegistry.launchCoalition())
+        clearUpAfterEarlierRuns()
         // A deleted project or session leaves no way back to its terminals, so they are
         // closed with it rather than kept alive by a store nothing can reach. Its open
         // shortcut output goes for the same reason.
@@ -104,25 +106,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // terminal - therefore strands every shell it had open, and nothing else will ever
     // close them. This launch is the first moment anything can. It waits on shells that
     // are slow to hang up, so it stays off the main actor.
-    private func closeShellsLeftBehind() {
+    //
+    // The same goes for anything else such a run started, like a daemon a command sent
+    // off on its own. The shells and commands go first, since those have notes of their
+    // own and are closed the way they expect.
+    private func clearUpAfterEarlierRuns() {
         Task.detached(priority: .utility) {
             let closed = await ShellRegistry.shared.reapOrphans()
             if !closed.isEmpty {
                 SessionLog.note("closed \(counted(closed.count, "shell")) left behind by an earlier run")
             }
             let stopped = await ShellRegistry.tasks.reapOrphans()
-            guard !stopped.isEmpty else { return }
-            SessionLog.note("stopped \(counted(stopped.count, "command")) left behind by an earlier run")
+            if !stopped.isEmpty {
+                SessionLog.note("stopped \(counted(stopped.count, "command")) left behind by an earlier run")
+            }
+            let ended = RunRegistry.shared.reapEarlierRuns()
+            guard ended > 0 else { return }
+            SessionLog.note("stopped \(counted(ended, "process", plural: "processes")) left behind by an earlier run")
         }
     }
 
     // The window is the app, so closing it quits rather than leaving a process with no
-    // way back into it except the Dock.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+    // way back into it except the Dock. Waiting for the last window to close is not
+    // enough: a detached Design window, minimised or on another Space, would keep the
+    // app running unseen, so the main window decides on its own.
+    func windowWillClose(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        // Quitting from inside the close would tear the window down while AppKit is
+        // still closing it, so it waits for the close to finish.
+        DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 
-    // Reopening only happens when the app is already running, which now means the window
+    // Reopening only happens when the app is already running, which means the window
     // was hidden rather than closed, but the Dock icon still has to bring it back.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         showManager()
@@ -145,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .environment(orphanedWorktrees)
                     .environment(gitStats)
                     .environment(terminals)
+                    .environment(explorerMemory)
                     .environment(loginItem)
                     .environment(appSettings)
                     .environment(mobileAccess)
@@ -168,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             win.backgroundColor = Theme.backgroundNSColor
             win.isReleasedWhenClosed = false
             win.contentMinSize = NSSize(width: 960, height: 640)
+            win.delegate = self
             win.center()
             window = win
         }
@@ -176,11 +193,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Taken first: stopping a process can orphan its children, and an orphan no
+        // longer shows up as something the app started.
+        let leftovers = QuitSweep.snapshot()
         processes.stopAll()
         shortcuts.stopAll()
         runner.stopAll()
         terminals.stopEverything()
         mobileAccess.stop()
+        // Blocking here is deliberate. While the main thread waits, nothing can react to
+        // a process ending by starting the next one, such as a queued prompt.
+        let swept = leftovers.finish()
+        if swept.killed > 0 {
+            SessionLog.note("app quitting: killed \(counted(swept.killed, "process", plural: "processes")) "
+                            + "that ignored the stop, \(swept.left) still running")
+            SessionLog.flush()
+        }
         projects.save()
         dispatch.save()
         dispatchAuth.save()

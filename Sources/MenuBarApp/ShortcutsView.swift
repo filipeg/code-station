@@ -241,15 +241,13 @@ struct ShortcutsView: View {
     }
 
     private func confirmRemoval(of shortcut: Shortcut) {
-        let message = if shortcut.kind == .prompt {
-            "The prompt and its saved shortcut will be removed."
-        } else if store.state(run(for: shortcut)).isActive {
-            "This stops the running command and removes the shortcut."
-        } else {
-            "The command and its saved shortcut will be removed."
+        var rows = [Dialog.Impact.Row(title: shortcut.kind == .prompt ? "Saved prompt" : "Saved command",
+                                      detail: "Removed from Code Station.")]
+        if shortcut.kind == .command, store.state(run(for: shortcut)).isActive {
+            rows.append(.init(title: "Running command", detail: "Stopped right away."))
         }
-        dialogs.show(.confirm("Remove \(shortcut.name)?", message: message,
-                              action: "Remove") { store.remove(shortcut.id) })
+        dialogs.show(.impact("Remove \(shortcut.name)?", rows: rows,
+                             action: "Remove") { store.remove(shortcut.id) })
     }
 
     private static let outputBottom = "shortcut-output-bottom"

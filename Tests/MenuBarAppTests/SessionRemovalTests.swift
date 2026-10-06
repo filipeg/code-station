@@ -25,7 +25,11 @@ struct SessionRemovalTests {
                                                  workingTrees: WorkingTreeWatch()) {}
 
         #expect(dialog.title == "Delete \"Fix the parser\"?")
-        #expect(dialog.message == "Its conversation history is removed from the app.")
+        #expect(dialog.impact?.subject?.name == project.name)
+        #expect(dialog.impact?.rows.first?.title == "Conversation history")
+        #expect(dialog.impact?.rows.last?.title == "Project folder stays")
+        #expect(dialog.impact?.rows.last?.detail == project.collapsedPath)
+        #expect(dialog.impact?.rows.last?.kept == true)
         #expect(dialog.actions.first?.label == "Delete session")
         #expect(dialog.actions.first?.kind == .destructive)
         #expect(dialog.actions.last?.kind == .cancel)
@@ -43,8 +47,9 @@ struct SessionRemovalTests {
         let dialog = SessionRemoval.confirmation(for: session, in: store,
                                                  workingTrees: WorkingTreeWatch()) {}
 
-        #expect(dialog.message?.contains(
-            "Its generated Design files are permanently removed.") == true)
+        #expect(dialog.impact?.rows.contains {
+            $0.title == "Generated Design files" && !$0.kept
+        } == true)
         #expect(dialog.actions.first?.label == "Delete session and Design files")
     }
 
@@ -55,9 +60,9 @@ struct SessionRemovalTests {
         let dialog = SessionRemoval.confirmation(for: session, in: store,
                                                  workingTrees: WorkingTreeWatch()) {}
 
-        #expect(dialog.message?.contains("Its 1 worktree goes with it.") == true)
-        #expect(dialog.message?.contains("Branches are kept if they have unmerged commits.")
-            == true)
+        let row = dialog.impact?.rows.first { $0.title == "1 worktree" }
+        #expect(row?.detail == "Removed from disk. Branches are kept if they have unmerged commits.")
+        #expect(dialog.impact?.rows.contains { $0.title == "Project folder stays" } == false)
         #expect(dialog.actions.first?.label == "Delete session and worktrees")
     }
 
@@ -71,8 +76,9 @@ struct SessionRemovalTests {
         let dialog = SessionRemoval.confirmation(for: session, in: store,
                                                  workingTrees: workingTrees) {}
 
-        #expect(dialog.message?.contains("1 has uncommitted changes that will be lost.") == true)
-        #expect(dialog.message?.contains("Branches are kept") == false)
+        let row = dialog.impact?.rows.first { $0.title == "1 worktree" }
+        #expect(row?.detail == "Removed from disk. 1 has uncommitted changes that will be lost.")
+        #expect(dialog.impact?.warning?.contains("Uncommitted changes") == true)
     }
 
     // A run writes into the task's own folder, which outlives the run, so the deletion
@@ -85,7 +91,9 @@ struct SessionRemovalTests {
         let dialog = SessionRemoval.confirmation(for: run, in: store,
                                                  workingTrees: WorkingTreeWatch()) {}
 
-        #expect(dialog.message?.contains("Files it wrote in the task folder stay.") == true)
+        #expect(dialog.impact?.subject?.kind == .task)
+        #expect(dialog.impact?.rows.last?.title == "Task folder stays")
+        #expect(dialog.impact?.rows.last?.kept == true)
         #expect(dialog.actions.first?.label == "Delete run")
     }
 }

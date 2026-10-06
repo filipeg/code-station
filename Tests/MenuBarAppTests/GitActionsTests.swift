@@ -581,6 +581,39 @@ struct GitActionsTests {
         #expect(snapshot.behind == 0)
     }
 
+    @Test func listsRemoteBranches() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+        try first.git("push", "-q", "origin", "HEAD:copycat/agent-work")
+
+        // A clone also gets origin/HEAD, which only points at main and is left out.
+        let second = try remote.clone()
+        let snapshot = await GitInspector.snapshot(at: second.path)
+        #expect(snapshot.branches == ["main"])
+        #expect(Set(snapshot.remoteBranches) == [RemoteBranch(remote: "origin", name: "main"),
+                                                 RemoteBranch(remote: "origin", name: "copycat/agent-work")])
+    }
+
+    @Test func checksOutARemoteBranchAsALocalTrackingBranch() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+        try first.git("push", "-q", "origin", "HEAD:feature")
+        let second = try remote.clone()
+
+        let error = await GitActions.checkoutRemoteBranch(
+            RemoteBranch(remote: "origin", name: "feature"), at: second.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.branch == "feature")
+        #expect(after.upstream == "origin/feature")
+        #expect(after.branches.contains("feature"))
+    }
+
     // MARK: - Selective commits
 
     @Test func commitsOnlyTheSelectedFiles() async throws {

@@ -36,6 +36,11 @@ final class SiteConfigurationLoader {
         guard !isLoading,
               let url = FilePicker.chooseFile(prompt: "Load", message: message, types: [.json])
         else { return }
+        loadFile(url)
+    }
+
+    func loadFile(_ url: URL) {
+        guard !isLoading else { return }
         do {
             selection = try SiteConfigurationImporter.load(file: url)
             failure = nil
@@ -52,10 +57,11 @@ final class SiteConfigurationLoader {
     }
 }
 
-// Two cards offering the two places a shared file can come from: a Git repository to
-// clone, or a JSON file already on this Mac. The wizard and the skills marketplace both
-// ask the same question, so they ask it with the same cards.
+// Shared files come from a Git repository or a JSON file on this Mac. Onboarding
+// reveals one source at a time; the skills marketplace offers both cards together.
 struct SourcePicker: View {
+    private enum Source { case repository, file }
+
     @Binding var repositoryURL: String
     let repositoryTitle: String
     let repositoryDetail: String
@@ -66,19 +72,84 @@ struct SourcePicker: View {
     let isLoading: Bool
     let loadRepository: () -> Void
     let chooseFile: () -> Void
+    var showsOneSource = false
+
+    @State private var source = Source.repository
+    @State private var showsRepositoryHelp = false
 
     var body: some View {
+        if showsOneSource {
+            selectedSource
+        } else {
+            sourceCards
+        }
+    }
+
+    private var selectedSource: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 7) {
+                ChoicePill(title: "GitHub repository", selected: source == .repository,
+                           enabled: !isLoading) { source = .repository }
+                    .accessibilityAddTraits(source == .repository ? [.isSelected] : [])
+                ChoicePill(title: "JSON file", selected: source == .file,
+                           enabled: !isLoading) { source = .file }
+                    .accessibilityAddTraits(source == .file ? [.isSelected] : [])
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Configuration source")
+
+            if source == .repository {
+                Text("Repository URL").font(.system(size: 11, weight: .semibold))
+                HStack(spacing: 9) {
+                    repositoryField
+                    ActionButton(title: isLoading ? "Loading…" : "Load settings",
+                                 tone: .outlined, action: loadRepository)
+                        .disabled(isLoading || repositoryURL.isBlank)
+                }
+                InlineLink(title: showsRepositoryHelp
+                           ? "Hide repository details" : "What should the repository contain?",
+                           size: 11) { showsRepositoryHelp.toggle() }
+                    .accessibilityValue(showsRepositoryHelp ? "Expanded" : "Collapsed")
+                if showsRepositoryHelp {
+                    Text("A root-level site-defaults.json, teya-defaults.json, or one JSON file. Uses your existing Git access. Personal tokens and passwords stay outside this file.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                HStack(spacing: 12) {
+                    ActionButton(title: fileButton, tone: .outlined, icon: "folder",
+                                 action: chooseFile)
+                        .disabled(isLoading)
+                    Text("Choose a settings file on this Mac.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var repositoryField: some View {
+        TextField(placeholder, text: $repositoryURL)
+            .textFieldStyle(.plain)
+            .font(.mono(11.5))
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .fieldSurface()
+            .accessibilityLabel("GitHub repository URL")
+            .disabled(isLoading)
+            .onSubmit {
+                guard !isLoading, !repositoryURL.isBlank else { return }
+                loadRepository()
+            }
+    }
+
+    private var sourceCards: some View {
         HStack(alignment: .top, spacing: 12) {
             SourceCard(icon: "arrow.triangle.branch", title: repositoryTitle,
                        detail: repositoryDetail) {
                 VStack(alignment: .leading, spacing: 8) {
-                    TextField(placeholder, text: $repositoryURL)
-                        .textFieldStyle(.plain)
-                        .font(.mono(11.5))
-                        .padding(.horizontal, 10)
-                        .frame(height: 34)
-                        .fieldSurface()
-                        .onSubmit(loadRepository)
+                    repositoryField
                     ActionButton(title: isLoading ? "Loading…" : "Load repository",
                                  tone: .outlined,
                                  icon: isLoading ? nil : "arrow.down.circle",
@@ -157,9 +228,11 @@ struct SourceLoaded: View {
 
 struct SourceFailure: View {
     let message: String
+    let lineLimit: Int?
 
-    init(_ message: String) {
+    init(_ message: String, lineLimit: Int? = 5) {
         self.message = message
+        self.lineLimit = lineLimit
     }
 
     var body: some View {
@@ -170,7 +243,7 @@ struct SourceFailure: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .lineLimit(5)
+                .lineLimit(lineLimit)
         }
         .sourceResult(Theme.deletion)
     }

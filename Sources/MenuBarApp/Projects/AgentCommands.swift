@@ -231,6 +231,18 @@ private extension Substring {
 
 // The word being typed after a slash, and the commands it points at.
 enum SlashQuery {
+    static func highlightedRange(in text: String, commandNames: Set<String>) -> NSRange? {
+        guard let start = text.firstIndex(where: { !$0.isWhitespace }), text[start] == "/" else { return nil }
+        let end = text[start...].firstIndex(where: \.isWhitespace) ?? text.endIndex
+        let name = text[text.index(after: start)..<end].lowercased()
+        // A partial name is a command only while it can still be completed. Once the
+        // arguments start, it must match a whole name.
+        let known = end == text.endIndex
+            ? commandNames.contains(where: { $0.hasPrefix(name) })
+            : commandNames.contains(name)
+        return known ? NSRange(start..<end, in: text) : nil
+    }
+
     // A command is only ever the whole of an unfinished prompt: the CLIs read one off the
     // front of a prompt and nowhere else, and a slash in the middle of a sentence is a
     // path or a date far more often than it is a command.

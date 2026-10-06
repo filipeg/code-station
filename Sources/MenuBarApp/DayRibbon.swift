@@ -102,7 +102,11 @@ struct DayRibbon {
         }
 
         return DayRibbon(axis: axis,
-                         blocks: blocks.sorted { $0.start < $1.start },
+                         blocks: blocks.sorted {
+                             $0.start == $1.start
+                                 ? $0.sessionID.uuidString < $1.sessionID.uuidString
+                                 : $0.start < $1.start
+                         },
                          legend: legend,
                          spent: legend.reduce(0) { $0 + $1.spent },
                          now: now)

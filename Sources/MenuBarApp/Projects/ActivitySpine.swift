@@ -31,31 +31,37 @@ struct ActivitySpine: View {
     var body: some View {
         // A turn's calls are drawn lazily: a long turn would otherwise build every
         // receipt, and its diff, before a reader has scrolled anywhere near them.
-        LazyVStack(alignment: .leading, spacing: 0) {
+        // The caption stays outside the lazy stack. The stack guesses the height of the
+        // rows it has not built from the ones it has, and a shorter caption among them
+        // makes that guess change with the scroll position, so the transcript's height
+        // would flicker as it follows the bottom.
+        VStack(alignment: .leading, spacing: 0) {
             if !calls.isEmpty { caption }
-            ForEach(entries) { entry in
-                switch entry {
-                case .agents(let nodes):
-                    TranscriptAgentGroup(nodes: nodes, messageID: messageID,
-                                         projectPath: projectPath, openChange: openChange,
-                                         runInShell: runInShell)
-                        .padding(.vertical, 6)
-                case .call(let node):
-                    CallReceipt(
-                        node: node,
-                        presentation: ToolPresentationCache.presentation(
-                            for: node.tool, projectPath: projectPath),
-                        isExpanded: expanded.contains(node.id),
-                        onToggle: {
-                            if expanded.contains(node.id) {
-                                expanded.remove(node.id)
-                            } else {
-                                expanded.insert(node.id)
-                            }
-                        },
-                        openChange: openChange,
-                        runInShell: runInShell)
-                        .transition(.fadeIn)
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(entries) { entry in
+                    switch entry {
+                    case .agents(let nodes):
+                        TranscriptAgentGroup(nodes: nodes, messageID: messageID,
+                                             projectPath: projectPath, openChange: openChange,
+                                             runInShell: runInShell)
+                            .padding(.vertical, 6)
+                    case .call(let node):
+                        CallReceipt(
+                            node: node,
+                            presentation: ToolPresentationCache.presentation(
+                                for: node.tool, projectPath: projectPath),
+                            isExpanded: expanded.contains(node.id),
+                            onToggle: {
+                                if expanded.contains(node.id) {
+                                    expanded.remove(node.id)
+                                } else {
+                                    expanded.insert(node.id)
+                                }
+                            },
+                            openChange: openChange,
+                            runInShell: runInShell)
+                            .transition(.fadeIn)
+                    }
                 }
             }
         }

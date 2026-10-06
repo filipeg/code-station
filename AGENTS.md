@@ -4,6 +4,7 @@
 
 - Never use native AppKit or SwiftUI controls that draw with the system's chrome. They cannot be styled and look like a piece of another program. This rules out `NSAlert`, `.alert`, `.confirmationDialog`, `.contextMenu`, `Menu`, `Picker` (dropdown and segmented), the built-in `Button` styles (`.bordered`, `.borderedProminent`, or no style at all), the built-in `Toggle` styles (`.switch`, `.checkbox`) and `.textFieldStyle(.roundedBorder)`.
 - For popup dialogs, use the in-app `Dialog` shown through `DialogPresenter` (see `Sources/MenuBarApp/Dialog.swift`).
+- To confirm a deletion, use `Dialog.impact`: one row for each thing that goes (marked with a minus), one row for each thing that stays (marked with a tick), and a warning for anything that cannot be restored. When the deletion happens inside a project, task or workspace, pass it as the `subject` so its tile shows at the top.
 - For dropdown selections and context menus, use `.appMenu` and `.appContextMenu` backed by `MenuPresenter` (see `Sources/MenuBarApp/ContextMenu.swift`).
 - For segmented choices, lay out `ChoicePill`s in an `HStack` (see `Sources/MenuBarApp/Choices.swift`).
 - For switches and checkboxes, use `.toggleStyle(.appSwitch)` and `.toggleStyle(.appCheckbox)` (see `Sources/MenuBarApp/Controls.swift`).

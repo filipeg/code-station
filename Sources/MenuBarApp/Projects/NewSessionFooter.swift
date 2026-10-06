@@ -1,10 +1,6 @@
 import SwiftUI
 
-// The bar both new-session sheets end with. The line at its start says what still
-// stands between the sheet and a session, or what creating will mean once nothing
-// does; then Cancel, the bot the session will wear, and the split button that creates
-// on its left half and picks the coding agent on its right, with the agent it will use
-// written underneath.
+// Shared readiness and actions for single-project and workspace sessions.
 struct NewSessionFooter: View {
     let sessionID: UUID
     // What creating will do. Shown once nothing is running.
@@ -38,23 +34,28 @@ struct NewSessionFooter: View {
     var body: some View {
         VStack(spacing: 0) {
             Divider().overlay(Theme.hairline)
-            HStack(alignment: .top, spacing: 10) {
-                if waitingOn != nil {
-                    ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    if waitingOn != nil { ProgressView().controlSize(.small) }
+                    Text(waitingOn ?? (chosenAgent == nil ? "No coding agent found on PATH." : note))
+                        .font(.system(size: 12))
+                        .foregroundStyle(chosenAgent == nil ? Theme.deletion : Theme.accent)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(waitingOn ?? note)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 12)
-                ActionButton(title: "Cancel", size: 13, keyboardShortcut: .cancelAction,
-                             action: dismiss)
-                SessionBotPicker(avatars: appSettings.agentAvatars,
-                                 selectedName: $selectedAvatarName,
-                                 sessionID: sessionID)
-                createButton
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .bottom, spacing: 12) {
+                        selectors
+                        Spacer(minLength: 12)
+                        actions
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        selectors
+                        HStack { Spacer(); actions }
+                    }
+                }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
             .background(Theme.card)
         }
         .task {
@@ -63,44 +64,21 @@ struct NewSessionFooter: View {
         }
     }
 
-    private var createButton: some View {
-        VStack(alignment: .trailing, spacing: 3) {
-            HStack(spacing: 0) {
-                Button(action: create) {
-                    Text("Create session")
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 18)
-                        .frame(height: 32)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .hoverLift()
-                .keyboardShortcut(.defaultAction)
+    private var selectors: some View {
+        AgentAndBotPicker(avatars: appSettings.agentAvatars,
+                          selectedAvatarName: $selectedAvatarName, sessionID: sessionID,
+                          agentTitle: chosenAgent?.title ?? "Unavailable",
+                          agentEnabled: !runner.availableAgents.isEmpty,
+                          agentMenu: agentMenu)
+    }
 
-                if runner.availableAgents.count > 1 {
-                    Rectangle()
-                        .fill(.white.opacity(0.35))
-                        .frame(width: 1, height: 16)
-
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
-                        .appMenu { agentMenu }
-                        .accessibilityLabel("Choose coding agent")
-                }
-            }
-            .foregroundStyle(.white)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accentFill))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .opacity(canCreate ? 1 : 0.4)
-            .disabled(!canCreate)
-
-            // Only the agent line goes here. Anything wider than the button pushes it
-            // away from Cancel, since this column is as wide as its widest row.
-            Text(agentNote)
-                .font(.system(size: 10.5))
-                .foregroundStyle(chosenAgent == nil ? Theme.deletion : .secondary)
+    private var actions: some View {
+        HStack(spacing: 9) {
+            ActionButton(title: "Cancel", tone: .outlined, height: 38, size: 13,
+                         keyboardShortcut: .cancelAction, action: dismiss)
+            ActionButton(title: "Create session", tone: .green, height: 38, size: 13,
+                         keyboardShortcut: .defaultAction, action: create)
+                .disabled(!canCreate)
         }
     }
 
@@ -118,14 +96,6 @@ struct NewSessionFooter: View {
 
     private var canCreate: Bool {
         ready && waitingOn == nil && chosenAgent != nil
-    }
-
-    private var agentNote: String {
-        guard let chosenAgent else { return "No coding agent found on PATH." }
-        if runner.availableAgents.count == 1 || selectedAgent != nil {
-            return "Will use \(chosenAgent.title)"
-        }
-        return "Uses default: \(chosenAgent.title)"
     }
 
     private var agentMenu: [MenuEntry] {

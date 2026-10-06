@@ -21,6 +21,22 @@ struct TaskTemplateTests {
         #expect(found == ["ok"])
     }
 
+    @Test func marksWhereEachHoleSitsForTheEditorToColour() {
+        let prompt = "Deploy {{env}} to {{ region }}, not {{}} or {{a.b}}."
+
+        let ranges = TaskTemplate.holeRanges(in: prompt).map { (prompt as NSString).substring(with: $0) }
+
+        #expect(ranges == ["{{env}}", "{{ region }}"])
+    }
+
+    @Test func marksHolesPastTextThatTakesMoreThanOneUnitToStore() {
+        let prompt = "🚀 Ship {{env}}"
+
+        let ranges = TaskTemplate.holeRanges(in: prompt)
+
+        #expect(ranges.map { (prompt as NSString).substring(with: $0) } == ["{{env}}"])
+    }
+
     @Test func fillsEveryHoleWithWhatTheRunWasGiven() {
         let spec = TaskSpec(prompt: "Review {{pr}} on {{repo}}.\nSay {{pr}} twice.")
 

@@ -74,6 +74,7 @@ struct SessionFactsChip: View {
     // hands it less, and a name too long for either cuts from the tail: the end of a
     // branch name is the part that repeats across a project.
     var maxWidth: CGFloat = 210
+    var showsBranch = true
     let openChanges: () -> Void
     let contextActions: () -> [MenuEntry]
     let usageTooltip: () -> Tooltip
@@ -136,7 +137,7 @@ struct SessionFactsChip: View {
     }
 
     private var accessibilityLabel: String {
-        let opens = facts.namedBranch.map { "Branch \($0), session details" }
+        let opens = (showsBranch ? facts.namedBranch : nil).map { "Branch \($0), session details" }
             ?? "Session details"
         guard let context = facts.context else { return opens }
         let window = facts.agent.asksPermissions ? "context" : "window"
@@ -145,12 +146,12 @@ struct SessionFactsChip: View {
 
     private func chip(_ summary: String) -> some View {
         HStack(spacing: 6) {
-            if facts.namedBranch != nil {
+            if showsBranch && facts.namedBranch != nil {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
-            Text(summary)
+            Text(showsBranch ? summary : "Session details")
                 .font(.mono(10.5))
                 .foregroundStyle(isOpen ? .primary : .secondary)
                 .lineLimit(1)

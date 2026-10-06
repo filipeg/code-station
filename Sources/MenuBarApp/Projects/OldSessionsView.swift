@@ -88,11 +88,11 @@ struct OldSessionsView: View {
                     // of reach, so its rows are not counted here either.
                     if unbuiltDesigns > 0 {
                         notice(icon: "paintbrush.pointed", tint: Theme.deletion,
-                               Self.unbuiltDesignCost(unbuiltDesigns, unticked: true))
+                               Self.unbuiltDesignCost(unbuiltDesigns))
                     }
                     if dirtyWorktrees > 0 {
                         notice(icon: "exclamationmark.triangle", tint: Theme.deletion,
-                               Self.dirtyWorktreeCost(dirtyWorktrees, unticked: true))
+                               Self.dirtyWorktreeCost(dirtyWorktrees))
                     }
                     if everythingIsSnoozed {
                         Text("Every project is snoozed. Nothing is cleared until they come back.")
@@ -268,24 +268,22 @@ struct OldSessionsView: View {
 
     // What deleting would cost, worded for one session or for several. Only designs that
     // were never built are named: once a design has become code, its files are a copy of
-    // something the checkout already holds. The card that flags the rows adds that they
-    // were left unticked; the dialog that asks again leaves that out, since by then the
-    // user has ticked them.
-    private static func unbuiltDesignCost(_ count: Int, unticked: Bool) -> String {
+    // something the checkout already holds.
+    private static func unbuiltDesignCost(_ count: Int) -> String {
         if count == 1 {
-            return "One session holds a design that was never implemented\(unticked ? ", so it is left unticked" : ""). "
+            return "One session holds a design that was never implemented, so it is left unticked. "
                 + "Deleting it permanently removes that design's HTML and local assets."
         }
-        return "\(count) sessions hold designs that were never implemented\(unticked ? ", so they are left unticked" : ""). "
+        return "\(count) sessions hold designs that were never implemented, so they are left unticked. "
             + "Deleting them permanently removes those designs' HTML and local assets."
     }
 
-    private static func dirtyWorktreeCost(_ count: Int, unticked: Bool) -> String {
+    private static func dirtyWorktreeCost(_ count: Int) -> String {
         if count == 1 {
-            return "One session has uncommitted changes in its worktree\(unticked ? ", so it is left unticked" : ""). "
+            return "One session has uncommitted changes in its worktree, so it is left unticked. "
                 + "Deleting it loses those changes; its branch survives if git considers that safe."
         }
-        return "\(count) sessions have uncommitted changes in their worktrees\(unticked ? ", so they are left unticked" : ""). "
+        return "\(count) sessions have uncommitted changes in their worktrees, so they are left unticked. "
             + "Deleting them loses those changes; their branches survive if git considers that safe."
     }
 
@@ -441,18 +439,21 @@ struct OldSessionsView: View {
             delete(chosen)
             return
         }
-        var consequences: [String] = []
+        var rows: [Dialog.Impact.Row] = []
         if unbuiltDesigns > 0 {
-            consequences.append(Self.unbuiltDesignCost(unbuiltDesigns, unticked: false))
+            rows.append(.init(title: counted(unbuiltDesigns, "design") + " never implemented",
+                              detail: "The HTML and local assets are permanently removed."))
         }
         if dirtyWorktrees > 0 {
-            consequences.append(Self.dirtyWorktreeCost(dirtyWorktrees, unticked: false))
+            rows.append(.init(title: counted(dirtyWorktrees, "worktree") + " with uncommitted changes",
+                              detail: "The changes are lost. Branches are kept if git considers that safe."))
         }
-        dialogs.show(.confirm(chosen.count == 1
-                                  ? "Delete a session with saved work?"
-                                  : "Delete sessions with saved work?",
-                              message: consequences.joined(separator: "\n\n"),
-                              action: deleteLabel) {
+        dialogs.show(.impact(chosen.count == 1
+                                 ? "Delete a session with saved work?"
+                                 : "Delete sessions with saved work?",
+                             message: "\(counted(chosen.count, "session")) will leave Code Station, along with this work.",
+                             rows: rows, warning: "This work cannot be restored.",
+                             action: deleteLabel) {
             delete(chosen)
         })
     }

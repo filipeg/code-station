@@ -245,7 +245,7 @@ struct DiffGapHit: Equatable {
 enum DiffText {
     static func attributed(_ lines: [DiffLine],
                            language: CodeLanguage? = nil,
-                           scale: CGFloat = 1) -> NSAttributedString {
+                           scale: CGFloat = 1, numbered: Bool = false) -> NSAttributedString {
         let font = NSFont.monospacedSystemFont(ofSize: 11 * scale, weight: .regular)
         // Colouring is for a diff a person reads; a huge one is scrolled, not read, and
         // plain text is much cheaper to build.
@@ -256,6 +256,13 @@ enum DiffText {
         // belong to, so the language follows the headings.
         var activeLanguage = withinLimit ? language : nil
         let result = NSMutableAttributedString()
+        var numbers: [Int: (Int?, Int?)] = [:]
+        if numbered {
+            for row in DiffComparisonRow.align(lines) {
+                if let left = row.left { numbers[left.id] = (row.oldNumber, row.left == row.right ? row.newNumber : nil) }
+                if let right = row.right, right != row.left { numbers[right.id] = (nil, row.newNumber) }
+            }
+        }
         for (index, line) in lines.enumerated() {
             if line.kind == .section {
                 activeLanguage = withinLimit
@@ -281,6 +288,16 @@ enum DiffText {
                 attributes[.paragraphStyle] = style
             }
             let isCode = line.kind == .addition || line.kind == .deletion || line.kind == .context
+            if numbered, isCode {
+                let pair = numbers[line.id]
+                let old = pair?.0.map(String.init) ?? ""
+                let new = pair?.1.map(String.init) ?? ""
+                let prefix = String(repeating: " ", count: max(0, 5 - old.count)) + old + " "
+                    + String(repeating: " ", count: max(0, 5 - new.count)) + new + "  "
+                var numberAttributes = attributes
+                numberAttributes[.foregroundColor] = NSColor.secondaryLabelColor
+                result.append(NSAttributedString(string: prefix, attributes: numberAttributes))
+            }
             if let gap = line.gap {
                 result.append(controls(gap, attributes: attributes))
             } else if let activeLanguage, isCode {

@@ -645,6 +645,7 @@
 
     #toast {
       position: fixed;
+      pointer-events: none;
       z-index: 10;
       top: calc(14px + env(safe-area-inset-top));
       right: 16px;
@@ -658,20 +659,125 @@
       transition: transform .2s ease-out;
     }
     #toast.visible { transform: translateY(0); }
+
+    body { height: 100dvh; background: var(--canvas); }
+    button { min-height: 44px; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible {
+      outline: 3px solid var(--green); outline-offset: 3px;
+    }
+    #back { width: 44px; height: 44px; margin-left: 0; border: 1px solid var(--hairline-strong); border-radius: 50%; }
+    .head-where { font: 12px/1.5 var(--sans); }
+    .connection { display: flex; align-items: center; gap: 7px; border: 0; background: none; color: var(--green); font-size: 12px; padding: 0; }
+    .connection .light { width: 7px; height: 7px; }
+    #offline { flex: none; padding: 12px 18px; background: var(--bubble); font-size: 14px; line-height: 1.5; }
+    #offline button { color: var(--green); border: 0; background: none; text-decoration: underline; }
+    #directory-scroll { flex: 1; overflow: auto; padding: 38px 24px max(28px, env(safe-area-inset-bottom)); }
+    .directory-content { max-width: 876px; margin: auto; }
+    .intro { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
+    .intro h1 { margin: 0 0 9px; font: 600 34px var(--serif); letter-spacing: -.7px; }
+    .intro p { margin: 0; color: var(--muted); line-height: 1.5; font-size: 14px; }
+    .intro-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .group-name { white-space: normal; overflow-wrap: anywhere; }
+    #scope { border-radius: 24px; padding: 9px 12px; background: var(--field); color: var(--muted); font-size: 12px; }
+    .toolbar { display: flex; gap: 16px; justify-content: space-between; margin-bottom: 24px; }
+    .filters { display: flex; gap: 6px; }
+    .pill { border: 1px solid var(--hairline-strong); border-radius: 24px; padding: 0 16px; background: transparent; font-size: 13px; }
+    .pill.active, .new { background: #2f4a33; color: white; }
+    #search { min-width: 0; width: 255px; border: 1px solid var(--hairline-strong); border-radius: 24px; background: var(--card); padding: 11px 17px; font-size: 16px; }
+    #attention { display: flex; align-items: center; gap: 12px; padding: 16px; border-radius: 12px; background: var(--bubble); margin-bottom: 26px; color: var(--amber-text); font-size: 14px; }
+    #attention p { margin: 5px 0 0; font-size: 13px; }
+    #attention button { margin-left: auto; border: 0; background: none; color: var(--amber-text); font-weight: 600; }
+    #projects { overflow: visible; background: transparent; }
+    .group { margin-bottom: 24px; border: 0; }
+    .group-head { padding: 0 2px 10px; flex-wrap: wrap; }
+    .group-toggle { padding: 0; }
+    .group-path { font: 12px/1.5 var(--sans); letter-spacing: 0; }
+    .project-tile { width: 34px; height: 34px; flex: none; border-radius: 9px; display: grid; place-items: center; font-size: 12px; font-weight: 650; color: var(--tint-ink); background: color-mix(in srgb, var(--tint) 15%, var(--card)); }
+    @media (prefers-color-scheme: dark) { .project-tile { color: var(--tint); } }
+    .project-info { color: var(--green); background: none; border: 0; font-size: 13px; padding: 0 4px; }
+    .group-content { background: var(--card); border: 1px solid var(--hairline-strong); border-radius: 12px; }
+    .row { padding: 19px; gap: 14px; }
+    .row-title { font: 600 15px/1.4 var(--sans); white-space: normal; }
+    .row-meta { display: flex; flex-wrap: wrap; gap: 7px 12px; font: 12px/1.5 var(--sans); letter-spacing: 0; white-space: normal; }
+    .row-meta span { overflow-wrap: anywhere; }
+    .row-meta .flag { font: inherit; letter-spacing: 0; }
+    .row-state { flex: none; color: var(--muted); font-size: 12px; }
+    .row-state.wait { color: var(--amber-text); background: var(--field); padding: 6px 9px; border-radius: 6px; }
+    .row-state.run { color: var(--green); }
+    .foot { text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 30px; }
+    .dialog-title { font: 600 26px var(--serif); margin: 4px 0; }
+    .dialog-copy { font-size: 14px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+    .sheet .close { align-self: flex-end; border: 0; background: none; color: var(--green); }
+    .runs-in { font: 13px/1.5 var(--sans); letter-spacing: 0; }
+    .allow, #send { background: #2f4a33; color: white; }
+    .row-diff { display: inline-flex; gap: 7px; white-space: nowrap; }
+    #session-tabs { display: flex; gap: 24px; padding: 0 20px; border-bottom: 1px solid var(--hairline-strong); }
+    #session-tabs button { border: 0; border-bottom: 3px solid transparent; background: none; font-size: 14px; padding: 10px 4px; }
+    #session-tabs button[aria-pressed="true"] { border-bottom-color: var(--green); color: var(--green); font-weight: 600; }
+    #design-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .preview-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
+    #design-title { flex: 1; min-width: 120px; font-size: 14px; }
+    #design-screens { display: flex; gap: 6px; overflow: auto; padding: 0 16px 8px; }
+    #design-canvas { flex: 1; min-height: 0; overflow: auto; display: flex; justify-content: center; background: var(--field); padding: 12px; }
+    #design-frame { width: 390px; max-width: 100%; height: 100%; min-height: 360px; flex: none; border: 1px solid var(--hairline-strong); border-radius: 12px; background: var(--card); }
+    #design-canvas.wide #design-frame { width: 960px; max-width: none; }
+    #design-canvas.wide { justify-content: flex-start; }
+    .design-footer { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); font-size: 13px; }
+    .design-footer p { color: var(--muted); }
+    body.design-open #transcript, body.design-open #strip, body.design-open #queued, body.design-open #composer, body.design-open #bar, body.design-open #conversation-target { display: none; }
+    body.design-expanded #session > header, body.design-expanded #session-tabs, body.design-expanded .design-footer { display: none; }
+    #conversation-target { padding: 8px 20px; color: var(--green); font-size: 12px; }
+    @media (prefers-reduced-motion: reduce) {
+      .sheet, .screen, #toast, .cursor, .light { animation: none; transition: none; }
+    }
+    @media (min-width: 621px) {
+      .sheet { width: 480px; left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%); border: 1px solid var(--hairline-strong); border-radius: 18px; max-height: 88dvh; animation: none; padding: 26px; }
+      #transcript, #composer, #queued { padding-left: max(24px, calc((100% - 712px) / 2)); padding-right: max(24px, calc((100% - 712px) / 2)); }
+    }
+    @media (max-width: 620px) {
+      #directory-scroll { padding: 27px 18px max(24px, env(safe-area-inset-bottom)); }
+      .intro h1 { font-size: 29px; }
+      .intro { flex-wrap: wrap; }
+      .intro-actions { width: 100%; }
+      #scope { display: none; }
+      .toolbar { flex-wrap: wrap; gap: 15px; }
+      #search { order: -1; width: 100%; }
+      .filters { width: 100%; }
+      .filters .pill { flex: 1; padding: 0 10px; }
+      .row { padding: 17px 14px; gap: 10px; flex-wrap: wrap; }
+      .row-copy { flex-basis: 70%; }
+      .row .chevron { display: none; }
+      .head-title { font-size: 16px; }
+      .connection { max-width: 104px; font-size: 11px; text-align: left; }
+    }
   </style>
 </head>
 <body>
   <div id="toast" role="alert"></div>
 
+  <div id="offline" role="status" hidden><strong id="offline-title">Connection interrupted</strong>
+    <div id="offline-detail">Your sessions and draft are still here. Keep your Mac awake and both devices on the same Wi-Fi.</div>
+    <button id="retry" type="button">Try again</button>
+  </div>
   <div id="directory" class="screen" hidden>
     <header>
       <div class="head-copy">
-        <div id="list-title" class="head-title">Connecting…</div>
+        <div id="list-title" class="head-title">Code Station</div>
         <div id="list-where" class="head-where">Teya Code Station</div>
       </div>
-      <span id="list-light" class="light" aria-label="Disconnected"></span>
+      <button class="connection" type="button"><span id="list-light" class="light" aria-hidden="true"></span><span class="connection-label">Connecting…</span></button>
     </header>
-    <main id="projects"><div class="empty">Connecting to your Mac…</div></main>
+    <main id="directory-scroll"><div class="directory-content">
+      <div class="intro"><div><h1>Your sessions</h1><p>Pick up where you left off on your Mac.</p></div><div class="intro-actions"><span id="scope"></span><button id="new-session" class="new remote" type="button" hidden>New session</button></div></div>
+      <div class="toolbar"><nav class="filters" aria-label="Filter sessions">
+        <button class="pill active" data-filter="all" aria-pressed="true">All</button>
+        <button class="pill" data-filter="wait" aria-pressed="false">Needs you</button>
+        <button class="pill" data-filter="run" aria-pressed="false">Running</button>
+      </nav><input id="search" type="search" placeholder="Find a session…" aria-label="Find a session"></div>
+      <div id="attention" hidden></div>
+      <div id="projects"><div class="empty">Connecting to your Mac…</div></div>
+      <p class="foot">Sessions run on your Mac. You can close this page anytime.</p>
+    </div></main>
   </div>
 
   <div id="session" class="screen" hidden>
@@ -681,8 +787,22 @@
         <div id="title" class="head-title">Connecting…</div>
         <div id="where" class="head-where">Teya Code Station</div>
       </div>
-      <span id="light" class="light" aria-label="Disconnected"></span>
+      <button class="connection" type="button"><span id="light" class="light" aria-hidden="true"></span><span class="connection-label">Connecting…</span></button>
     </header>
+    <nav id="session-tabs" aria-label="Session views">
+      <button id="conversation-tab" type="button" aria-pressed="true">Conversation</button>
+      <button id="design-tab" type="button" aria-pressed="false">Design</button>
+    </nav>
+    <div id="conversation-target" hidden></div>
+    <section id="design-panel" aria-label="Design preview" hidden>
+      <div class="preview-tools"><strong id="design-title">Design preview</strong>
+        <button id="preview-size" class="pill" type="button" aria-label="Switch preview width">390 px</button>
+        <button id="preview-expand" class="pill" type="button" aria-pressed="false">Expand</button>
+      </div>
+      <nav id="design-screens" aria-label="Design screens"></nav>
+      <main id="design-canvas"><iframe id="design-frame" title="Interactive Design preview" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe><p id="design-empty" class="empty">No Design preview has been published for this session yet.</p></main>
+      <footer class="design-footer"><p>Try the design directly.</p><button id="discuss-design" class="pill" type="button" hidden>Discuss design</button><button id="design-back" class="pill" type="button">Back to conversation</button></footer>
+    </section>
     <div id="strip">
       <span id="state" class="quiet">CONNECTING</span>
       <span id="diff" hidden></span>
@@ -741,6 +861,22 @@
       const sendButton = find('send');
       const toast = find('toast');
       let socket;
+      let authenticated = false;
+      let pairingEnded = false;
+      let activeSessionID;
+      const drafts = new Map();
+      let conversation = 'main';
+      let scopeLabel = '';
+      let filter = 'all';
+      let query = '';
+      let infoSheet;
+      let modal;
+      let modalReturn;
+      let design;
+      let selectedDesignScreen;
+      let denialDraft = '';
+      let newDraft = '';
+      let authenticationTimer;
       let reconnectTimer;
       let toastTimer;
       let sheet;
@@ -751,10 +887,10 @@
       // The list as the Mac last described it, so the new-session sheet can name the
       // project it is about without asking for it again.
       let listing = { title: '', canCreate: false, projects: [] };
-      // Projects start shut. Once opened, their newest few sessions match the rail on the
-      // Mac, with the rest under see-more. Both choices survive list updates from the Mac.
+      // Keep expansion and see-more choices while directory updates arrive.
       const sessionLimit = 4;
       const expandedProjects = new Set();
+      const knownProjects = new Set();
       const unfolded = new Set();
       let creating = false;
       // Whether the ask has been put down. It survives an update to the ask itself, so a
@@ -792,71 +928,150 @@
       };
 
       const send = command => {
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
+        if (!authenticated || !socket || socket.readyState !== WebSocket.OPEN) {
           showError('The Mac is not connected.');
           return false;
         }
-        socket.send(JSON.stringify(command));
+        socket.send(JSON.stringify({ sessionID: activeSessionID, conversation, ...command }));
         return true;
       };
 
-      const setConnected = live => {
-        for (const dot of [light, listLight]) {
-          dot.setAttribute('aria-label', live ? 'Connected' : 'Disconnected');
-        }
-        // The session light says what the session is doing, so only the list light is
-        // free to say whether the Mac is still on the other end.
-        listLight.className = live ? 'light live' : 'light';
-        if (!live) light.className = 'light';
-        sendButton.disabled = !live;
+      const remoteButton = (className, text, handler) => {
+        const node = button(className, text, handler);
+        node.classList.add('remote');
+        node.disabled = !authenticated;
+        return node;
       };
+
+      const setConnected = live => {
+        authenticated = live;
+        if (live) { clearTimeout(toastTimer); toast.classList.remove('visible'); }
+        document.querySelectorAll('.connection-label').forEach(node => {
+          node.textContent = live ? 'Connected to Mac' : pairingEnded ? 'Pairing ended' : 'Disconnected';
+        });
+        for (const dot of [light, listLight]) dot.className = live ? 'light live' : 'light';
+        find('offline').hidden = live;
+        find('offline-title').textContent = pairingEnded ? 'Scan a fresh QR code' : 'Connection interrupted';
+        find('offline-detail').textContent = pairingEnded
+          ? 'This pairing is no longer available. Open phone sharing on your Mac and scan a fresh code. Your draft is kept here.'
+          : 'Your sessions and draft are still here. Keep your Mac awake and both devices on the same Wi-Fi.';
+        find('retry').hidden = pairingEnded;
+        sendButton.disabled = !live;
+        stop.disabled = !live;
+        back.disabled = !live;
+        find('discuss-design').disabled = !live;
+        document.querySelectorAll('.remote').forEach(node => { node.disabled = !live; });
+      };
+
+      const dismissModal = () => {
+        modal = undefined;
+        directoryScreen.inert = false;
+        sessionScreen.inert = false;
+        if (modalReturn?.isConnected && !modalReturn.disabled && !modalReturn.closest('[hidden]')) modalReturn.focus();
+        else (screen === 'directory' ? find('search') : ask ? bar : prompt).focus();
+        modalReturn = undefined;
+      };
+
+      const focusDialog = (panel, label) => {
+        if (!modal) modalReturn = document.activeElement;
+        modal = panel;
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute('aria-label', label);
+        panel.tabIndex = -1;
+        directoryScreen.inert = true;
+        sessionScreen.inert = true;
+        panel.focus();
+      };
+
+      const closeInfo = () => {
+        infoSheet?.remove();
+        infoSheet = undefined;
+        scrim?.remove();
+        scrim = undefined;
+        dismissModal();
+        drawSheet();
+      };
+
+      const showInfo = (heading, lines) => {
+        if (infoSheet) closeInfo();
+        infoSheet = element('section', 'sheet');
+        infoSheet.setAttribute('role', 'dialog');
+        infoSheet.append(button('close', 'Close', closeInfo), element('h2', 'dialog-title', heading));
+        for (const line of lines) infoSheet.append(element('p', 'dialog-copy', line));
+        scrim = element('div');
+        scrim.id = 'scrim';
+        scrim.addEventListener('click', closeInfo);
+        document.body.append(scrim, infoSheet);
+        focusDialog(infoSheet, heading);
+      };
+
+      document.addEventListener('keydown', event => {
+        if (!modal) {
+          if (event.key === 'Escape' && document.body.classList.contains('design-expanded')) toggleExpand();
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          if (infoSheet) closeInfo();
+          else if (newSheet && !creating) closeNewSheet();
+          else if (sheet) collapse(true);
+        }
+        if (event.key !== 'Tab' || !modal) return;
+        const focusable = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href]')]
+          .filter(node => !node.hidden);
+        const first = focusable[0], last = focusable.at(-1);
+        if (!first) { event.preventDefault(); modal.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || document.activeElement === modal)) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === modal)) {
+          event.preventDefault(); first.focus();
+        }
+      });
 
       const show = next => {
         screen = next;
         directoryScreen.hidden = next !== 'directory';
         sessionScreen.hidden = next !== 'session';
+        if (next !== 'session') showDesign(false);
       };
 
       // How long ago something happened, in the one or two characters the rows have room
       // for. Drawn here rather than sent, so an idle list costs nothing to keep current.
       const ago = when => {
         const seconds = Math.max(0, (Date.now() - Date.parse(when)) / 1000);
-        if (seconds < 60) return 'NOW';
-        if (seconds < 3600) return `${Math.floor(seconds / 60)}M`;
-        if (seconds < 86400) return `${Math.floor(seconds / 3600)}H`;
-        if (seconds < 604800) return `${Math.floor(seconds / 86400)}D`;
-        return `${Math.floor(seconds / 604800)}W`;
+        if (seconds < 60) return 'Just now';
+        if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+        if (seconds < 86400) return `${Math.floor(seconds / 3600)} hr ago`;
+        if (seconds < 604800) return `${Math.floor(seconds / 86400)} days ago`;
+        return `${Math.floor(seconds / 604800)} weeks ago`;
       };
 
       // MARK: - The list
 
       const sessionRow = session => {
-        const row = element('button', 'row');
+        const row = remoteButton('row', '', () => send({ type: 'openSession', sessionID: session.id, conversation: session.conversation || 'main' }));
         row.type = 'button';
-        const dot = element('span', 'light');
-        if (session.state === 'RUNNING') dot.classList.add('running');
-        else if (session.state !== 'IDLE') dot.classList.add('attention');
-        row.append(dot);
-
         const copy = element('div', 'row-copy');
         copy.append(element('div', 'row-title', session.title));
         const meta = element('div', 'row-meta');
-        if (session.state !== 'IDLE') meta.append(element('span', 'flag', session.state));
         meta.append(element('span', '', ago(session.lastActivity)));
-        meta.append(element('span', '', session.workspace || session.branch || session.agent));
+        meta.append(element('span', '', session.agent));
+        if (session.workspace || session.branch) meta.append(element('span', '', session.workspace || session.branch));
         if (session.added || session.removed) {
-          meta.append(element('span', 'added', `+${session.added}`));
-          meta.append(element('span', 'removed', `−${session.removed}`));
+          const changes = element('span', 'row-diff');
+          changes.append(element('span', 'added', `+${session.added}`), element('span', 'removed', `−${session.removed}`));
+          meta.append(changes);
         }
         copy.append(meta);
         row.append(copy);
+        row.append(element('span', `row-state ${session.state === 'NEEDS YOU' ? 'wait' : session.state === 'RUNNING' ? 'run' : ''}`,
+          session.state === 'NEEDS YOU' ? 'Needs you' : session.state === 'RUNNING' ? '● Running' : session.state === 'IDLE' ? 'Ready' : session.state.toLowerCase()));
         row.append(element('span', 'chevron', '›'));
-        row.addEventListener('click', () => send({ type: 'openSession', sessionID: session.id }));
         return row;
       };
 
       const projectGroup = project => {
-        const expanded = expandedProjects.has(project.id);
+        const expanded = !!query.trim() || filter !== 'all' || expandedProjects.has(project.id);
         const group = element('div', `group${expanded ? ' expanded' : ''}`);
         const head = element('div', 'group-head');
         const toggle = element('button', 'group-toggle');
@@ -865,13 +1080,16 @@
         const copy = element('div', 'group-copy');
         copy.append(element('div', 'group-name', project.name));
         copy.append(element('div', 'group-path',
-          project.isMissing ? 'MISSING FROM DISK' : project.path));
+          project.isMissing ? 'Missing from disk' : `${project.sessions.length} sessions`));
+        const tile = element('span', 'project-tile', project.name.split(/[-_ ]/).map(part => part[0]).join('').slice(0, 2).toUpperCase());
+        tile.style.setProperty('--tint', project.tint);
+        tile.style.setProperty('--tint-ink', project.tintInk || 'var(--ink)');
+        toggle.append(tile);
         toggle.append(copy);
         toggle.append(element('span', 'group-chevron', '›'));
         head.append(toggle);
-        if (listing.canCreate && !project.isMissing) {
-          head.append(button('new', 'New', () => openNewSheet(project)));
-        }
+        head.append(button('project-info', 'Project info', () => showInfo(project.name, [project.path,
+          scopeLabel, 'You can read sessions, send instructions and respond to approval requests. Manage phone sharing on your Mac.'])));
         group.append(head);
 
         const body = element('div', 'group-body');
@@ -879,15 +1097,15 @@
         body.inert = !expanded;
         body.setAttribute('aria-hidden', String(!expanded));
         if (!project.sessions.length) {
-          content.append(element('div', 'group-empty', 'NO SESSIONS YET'));
+          content.append(element('div', 'group-empty', 'No sessions yet'));
         }
-        const visible = unfolded.has(project.id)
+        const visible = query.trim() || filter !== 'all' || unfolded.has(project.id)
           ? project.sessions
           : project.sessions.slice(0, sessionLimit);
         for (const session of visible) content.append(sessionRow(session));
         const hidden = project.sessions.length - visible.length;
         if (hidden) {
-          content.append(button('more', `SHOW ${hidden} MORE`, () => {
+          content.append(button('more', `Show ${hidden} more`, () => {
             unfolded.add(project.id);
             renderDirectory(listing);
           }));
@@ -907,23 +1125,58 @@
         return group;
       };
 
+      const filteredProjects = (projects, filter, query) => {
+        const needle = query.trim().toLocaleLowerCase();
+        return projects.map(project => ({ ...project, sessions: project.sessions.filter(session =>
+          (filter === 'all' || session.state === (filter === 'wait' ? 'NEEDS YOU' : 'RUNNING'))
+          && [project.name, session.title, session.agent, session.branch || '', session.workspace || '']
+            .join(' ').toLocaleLowerCase().includes(needle)) }))
+          .filter(project => project.sessions.length || (!needle && filter === 'all'));
+      };
+
       const renderDirectory = payload => {
         listing = payload;
-        listTitle.textContent = payload.title;
+        find('new-session').hidden = !payload.canCreate;
+        find('new-session').disabled = !authenticated || !payload.projects.some(project => !project.isMissing);
+        listTitle.textContent = 'Code Station';
+        scopeLabel = payload.scope;
+        find('scope').textContent = scopeLabel;
         const sessions = payload.projects.reduce((count, p) => count + p.sessions.length, 0);
         const running = payload.projects.reduce((count, p) =>
           count + p.sessions.filter(s => s.state === 'RUNNING').length, 0);
         const waiting = payload.projects.reduce((count, p) =>
           count + p.sessions.filter(s => s.state === 'NEEDS YOU').length, 0);
-        const parts = [`${sessions} session${sessions === 1 ? '' : 's'}`];
-        if (running) parts.push(`${running} running`);
-        if (waiting) parts.push(`${waiting} needs you`);
-        listWhere.textContent = parts.join(' · ').toUpperCase();
+        listWhere.textContent = payload.scope;
         document.title = `${payload.title} · Code Station`;
 
-        const groups = payload.projects.map(projectGroup);
+        for (const project of payload.projects) {
+          if (!knownProjects.has(project.id)) expandedProjects.add(project.id);
+          knownProjects.add(project.id);
+        }
+        const counts = { all: sessions, wait: waiting, run: running };
+        const labels = { all: 'All', wait: 'Needs you', run: 'Running' };
+        document.querySelectorAll('[data-filter]').forEach(node => {
+          node.textContent = `${labels[node.dataset.filter]} ${counts[node.dataset.filter]}`;
+          node.classList.toggle('active', node.dataset.filter === filter);
+          node.setAttribute('aria-pressed', String(node.dataset.filter === filter));
+        });
+        const attention = find('attention');
+        attention.hidden = !waiting;
+        const attentionCopy = element('div');
+        attentionCopy.append(element('strong', '', `${waiting} session${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`),
+          element('p', '', 'Open a session to see what needs you.'));
+        attention.replaceChildren(attentionCopy, remoteButton('', 'Review', () => {
+          const session = payload.projects.flatMap(project => project.sessions).find(session => session.state === 'NEEDS YOU');
+          if (session) send({ type: 'openSession', sessionID: session.id, conversation: session.conversation || 'main' });
+        }));
+        const filtered = filteredProjects(payload.projects, filter, query);
+        const groups = filtered.map(projectGroup);
         if (!groups.length) {
-          groups.push(element('div', 'empty', 'There are no projects on this Mac yet.'));
+          const empty = element('div', 'empty', payload.projects.length ? 'No sessions found. Try another search or filter.' : 'There are no projects on this Mac yet.');
+          if (query || filter !== 'all') empty.append(button('pill', 'Clear search and filters', () => {
+            query = ''; filter = 'all'; find('search').value = ''; renderDirectory(listing); find('search').focus();
+          }));
+          groups.push(empty);
         }
         projects.replaceChildren(...groups);
         if (screen !== 'directory') show('directory');
@@ -943,6 +1196,7 @@
 
       const openNewSheet = project => {
         newProject = project;
+        newDraft = '';
         newWorktree = project.isGit;
         creating = false;
         drawNewSheet();
@@ -955,6 +1209,7 @@
         scrim?.remove();
         scrim = undefined;
         document.body.classList.remove('starting');
+        dismissModal();
         drawSheet();
       };
 
@@ -975,6 +1230,8 @@
 
         const field = element('textarea');
         field.id = 'new-prompt';
+        field.value = newDraft;
+        field.addEventListener('input', () => { newDraft = field.value; });
         field.maxLength = 100000;
         field.placeholder = 'What should it do? (optional)';
         field.setAttribute('aria-label', 'First prompt');
@@ -1010,7 +1267,7 @@
 
         const buttons = element('div', 'buttons');
         buttons.append(button('quiet', 'Cancel', () => { if (!creating) closeNewSheet(); }));
-        const create = button('allow', creating ? 'Starting…' : 'Create session', () => {
+        const create = remoteButton('allow', creating ? 'Starting…' : 'Create session', () => {
           if (creating) return;
           if (send({ type: 'createSession', projectID: newProject.id,
                      worktree: newWorktree, prompt: field.value.trim() })) {
@@ -1022,6 +1279,7 @@
         buttons.append(create);
         newSheet.append(buttons);
         document.body.append(newSheet);
+        focusDialog(newSheet, `New session in ${newProject.name}`);
         dragToDismiss(handle, () => { if (!creating) closeNewSheet(); });
       };
 
@@ -1035,9 +1293,9 @@
         const seconds = Math.max(0, (Date.now() - Date.parse(header.since)) / 1000);
         if (header.state === 'RUNNING') {
           if (seconds < 60) return `${Math.floor(seconds)}S`;
-          if (seconds < 3600) return `${Math.floor(seconds / 60)}M`;
-          if (seconds < 86400) return `${Math.floor(seconds / 3600)}H`;
-          return `${Math.floor(seconds / 86400)}D`;
+          if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+          if (seconds < 86400) return `${Math.floor(seconds / 3600)} hr ago`;
+          return `${Math.floor(seconds / 86400)} days ago`;
         }
         return ago(header.since);
       };
@@ -1075,7 +1333,7 @@
         document.title = `${next.title} · Code Station`;
 
         const running = next.state === 'RUNNING';
-        light.className = `light ${running ? 'running' : next.state === 'IDLE' ? '' : 'attention'}`;
+        light.className = authenticated ? 'light live' : 'light';
         state.className = running ? '' : next.state === 'IDLE' ? 'quiet' : 'attention';
         renderElapsed();
         renderQueue();
@@ -1251,6 +1509,23 @@
           creating = false;
           closeNewSheet();
         }
+        if (activeSessionID !== snapshot.sessionID) {
+          design = undefined;
+          selectedDesignScreen = undefined;
+          renderDesign();
+          showDesign(false);
+        }
+        if (activeSessionID) drafts.set(`${activeSessionID}:${conversation}`, prompt.value);
+        activeSessionID = snapshot.sessionID;
+        conversation = snapshot.conversation || 'main';
+        prompt.value = drafts.get(`${activeSessionID}:${conversation}`) || '';
+        prompt.style.height = '';
+        scopeLabel = snapshot.scope;
+        find('conversation-tab').textContent = conversation === 'design' ? 'Conversation (back to main)' : 'Conversation';
+        find('conversation-target').hidden = conversation !== 'design';
+        find('conversation-target').textContent = 'Design conversation · Messages go to the companion Design session';
+        prompt.setAttribute('aria-label', conversation === 'design' ? 'Message the Design conversation' : 'Message this session');
+        prompt.placeholder = conversation === 'design' ? 'Message the Design conversation…' : 'Message this session…';
         back.hidden = !snapshot.canBrowse;
         queuedPrompts = snapshot.queued || [];
         renderHeader(snapshot.header);
@@ -1374,7 +1649,7 @@
       };
 
       const questionBody = () => {
-        const submit = button('allow', 'Submit answers', () => {
+        const submit = remoteButton('allow', 'Submit answers', () => {
           const answers = {};
           for (const question of ask.questions) answers[question.text] = answerFor(question);
           if (send({ type: 'answerPermission', requestID: ask.id, answer: 'answers', answers })) {
@@ -1382,7 +1657,7 @@
           }
         });
         const readySubmit = () => {
-          submit.disabled = !ask.questions.every(question => answerFor(question));
+          submit.disabled = !authenticated || !ask.questions.every(question => answerFor(question));
         };
 
         const parts = [];
@@ -1431,7 +1706,7 @@
         }
 
         const buttons = element('div', 'buttons');
-        buttons.append(button('deny', 'Skip', () =>
+        buttons.append(remoteButton('deny', 'Skip', () =>
           send({ type: 'answerPermission', requestID: ask.id, answer: 'deny' })));
         buttons.append(submit);
         parts.push(buttons);
@@ -1440,21 +1715,23 @@
 
       const permissionBody = () => {
         const parts = [];
+        parts.push(element('h2', 'dialog-title', 'Allow this request?'));
+        parts.push(element('div', 'dialog-copy', `${header.title} · ${header.project}`));
         parts.push(element('div', 'lead', ask.lead));
         if (ask.detail) parts.push(element('p', 'detail', ask.detail));
         if (ask.subject) parts.push(element('pre', 'subject', ask.subject));
-        if (ask.runsIn) parts.push(element('div', 'runs-in', `RUNS IN ${ask.runsIn}`));
+        if (ask.runsIn) parts.push(element('div', 'runs-in', `Runs in ${ask.runsIn}`));
 
         const buttons = element('div', 'buttons');
         buttons.append(button('deny', 'Deny', () => {
           denying = true;
           drawSheet();
         }));
-        buttons.append(button('allow', 'Allow once', () =>
+        buttons.append(remoteButton('allow', 'Allow once', () =>
           send({ type: 'answerPermission', requestID: ask.id, answer: 'allowOnce' })));
         parts.push(buttons);
         if (ask.alwaysTitle) {
-          parts.push(button('always', ask.alwaysTitle, () =>
+          parts.push(remoteButton('always', ask.alwaysTitle, () =>
             send({ type: 'answerPermission', requestID: ask.id, answer: 'allowAlways' })));
         }
         return parts;
@@ -1464,9 +1741,11 @@
         const reason = element('div', 'reason');
         const field = element('textarea');
         field.placeholder = 'Tell the agent why…';
+        field.value = denialDraft;
+        field.addEventListener('input', () => { denialDraft = field.value; });
         field.maxLength = 100000;
         field.setAttribute('aria-label', 'Why this is denied');
-        const submit = button('', '↑', () => {
+        const submit = remoteButton('', '↑', () => {
           if (send({ type: 'answerPermission', requestID: ask.id, answer: 'deny',
                      prompt: field.value.trim() })) {
             submit.disabled = true;
@@ -1482,17 +1761,21 @@
         sheet?.remove();
         sheet = undefined;
         // The new-session sheet owns the scrim while it is up, so the ask leaves it alone.
-        if (!newSheet) {
+        if (!newSheet && !infoSheet) {
           scrim?.remove();
           scrim = undefined;
         }
         document.body.classList.toggle('asking', !!ask && !collapsed);
         bar.hidden = !ask || !collapsed;
-        if (!ask || newSheet) return;
+        if (!ask || newSheet || infoSheet) {
+          if (!newSheet && !infoSheet && modal) dismissModal();
+          return;
+        }
 
         const label = ask.kind === 'question' ? 'QUESTION'
                                               : `PERMISSION · ${ask.toolName.toUpperCase()}`;
         if (collapsed) {
+          if (modal) dismissModal();
           bar.replaceChildren(element('span', 'kind-dot'), element('span', '', label),
                               element('span', 'strip-gap'), element('span', 'open', 'OPEN'));
           return;
@@ -1510,10 +1793,11 @@
         sheet.append(handle);
         const kind = element('div', 'kind');
         kind.append(element('span', 'kind-dot'), element('span', 'kind-label', label));
-        sheet.append(kind);
+        sheet.append(button('close', 'Close', () => collapse(true)), kind);
         const body = denying ? denyBody() : ask.kind === 'question' ? questionBody() : permissionBody();
         sheet.append(...body);
         document.body.append(sheet);
+        focusDialog(sheet, ask.kind === 'question' ? 'Answer the agent' : 'Review permission');
         dragToDismiss(handle, () => collapse(true), sheet);
       };
 
@@ -1523,6 +1807,7 @@
           collapsed = false;
           denying = false;
           answerState.clear();
+          denialDraft = '';
           drawSheet();
           return;
         }
@@ -1530,6 +1815,7 @@
           collapsed = false;
           denying = false;
           answerState.clear();
+          denialDraft = '';
         }
         ask = request;
         drawSheet();
@@ -1573,47 +1859,129 @@
 
       const connect = () => {
         clearTimeout(reconnectTimer);
+        clearTimeout(authenticationTimer);
+        if (pairingEnded) return;
         if (!secret) {
-          show('session');
-          title.textContent = 'Pairing code missing';
-          state.textContent = 'SCAN THE QR CODE AGAIN';
-          showError('The pairing code is missing. Scan the QR code again.');
+          pairingEnded = true;
+          setConnected(false);
           return;
         }
+        const previous = socket;
+        socket = undefined;
+        previous?.close();
+        setConnected(false);
+        document.querySelectorAll('.connection-label').forEach(node => { node.textContent = 'Connecting…'; });
         const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-        socket = new WebSocket(`${scheme}://${location.host}/socket/${pairingID}`);
-        socket.addEventListener('open', () => {
-          setConnected(true);
-          socket.send(JSON.stringify({ type: 'authenticate', version: 1, secret }));
+        const connection = new WebSocket(`${scheme}://${location.host}/socket/${pairingID}`);
+        socket = connection;
+        authenticationTimer = setTimeout(() => connection.close(), 10000);
+        connection.addEventListener('open', () => {
+          connection.send(JSON.stringify({ type: 'authenticate', version: 1, secret }));
         });
-        socket.addEventListener('message', event => {
+        connection.addEventListener('message', event => {
+          if (socket !== connection) return;
           try {
             const payload = JSON.parse(event.data);
-            if (payload.type === 'snapshot') applySnapshot(payload);
-            else if (payload.type === 'update') applyUpdate(payload);
-            else if (payload.type === 'directory') renderDirectory(payload);
-            else if (payload.type === 'error') {
-              // A refused start leaves the sheet up, so the reason can be read and the
-              // same tap tried again.
-              if (creating) {
-                creating = false;
-                if (newSheet) drawNewSheet();
-              }
-              showError(payload.message);
+            if (payload.type === 'snapshot' || payload.type === 'directory') {
+              clearTimeout(authenticationTimer);
+              if (!authenticated) setConnected(true);
+              if (payload.type === 'snapshot') applySnapshot(payload);
+              else renderDirectory(payload);
+            } else if (payload.type === 'update' && authenticated) applyUpdate(payload);
+            else if (payload.type === 'design' && authenticated && payload.sessionID === activeSessionID) {
+              design = payload;
+              renderDesign();
+            } else if (payload.type === 'error') {
+              if (payload.code === 'pairingEnded') {
+                pairingEnded = true;
+                clearTimeout(reconnectTimer);
+                clearTimeout(authenticationTimer);
+                setConnected(false);
+                connection.close();
+              } else showError(payload.message);
+              if (creating) { creating = false; if (newSheet) drawNewSheet(); }
             }
-          } catch (_) {
-            showError('The Mac sent an unreadable update.');
-          }
+          } catch (_) { showError('The Mac sent an unreadable update.'); }
         });
-        socket.addEventListener('close', () => {
+        connection.addEventListener('close', () => {
+          if (socket !== connection) return;
+          clearTimeout(authenticationTimer);
           setConnected(false);
-          state.textContent = 'RECONNECTING';
-          state.className = 'quiet';
-          listWhere.textContent = 'RECONNECTING';
-          reconnectTimer = setTimeout(connect, 1500);
+          if (!pairingEnded) reconnectTimer = setTimeout(connect, 1500);
         });
-        socket.addEventListener('error', () => socket.close());
+        connection.addEventListener('error', () => connection.close());
       };
+
+      const showDesign = visible => {
+        document.body.classList.toggle('design-open', visible);
+        if (!visible) {
+          document.body.classList.remove('design-expanded');
+          find('preview-expand').textContent = 'Expand';
+          find('preview-expand').setAttribute('aria-pressed', 'false');
+        }
+        find('design-panel').hidden = !visible;
+        find('design-tab').setAttribute('aria-pressed', String(visible));
+        find('conversation-tab').setAttribute('aria-pressed', String(!visible));
+        if (visible && ask) collapse(true);
+      };
+
+      const renderDesign = () => {
+        const screens = design?.screens || [];
+        const selected = screens.find(screen => screen.id === selectedDesignScreen) || screens[0];
+        selectedDesignScreen = selected?.id;
+        find('design-title').textContent = selected?.title || 'Design preview';
+        find('design-empty').hidden = !!selected;
+        find('design-frame').hidden = !selected;
+        find('discuss-design').hidden = !design?.hasConversation;
+        find('design-screens').replaceChildren(...screens.map(screen => {
+          const choice = button(`pill${screen.id === selected?.id ? ' active' : ''}`, screen.title, () => {
+            selectedDesignScreen = screen.id; renderDesign();
+          });
+          choice.setAttribute('aria-pressed', String(screen.id === selected?.id));
+          return choice;
+        }));
+        if (selected) {
+          const url = `${selected.url}?revision=${encodeURIComponent(design.revision)}`;
+          if (find('design-frame').getAttribute('src') !== url) find('design-frame').src = url;
+        } else find('design-frame').removeAttribute('src');
+      };
+
+      const toggleExpand = () => {
+        const expanded = document.body.classList.toggle('design-expanded');
+        find('preview-expand').textContent = expanded ? 'Collapse' : 'Expand';
+        find('preview-expand').setAttribute('aria-pressed', String(expanded));
+      };
+      find('preview-expand').addEventListener('click', toggleExpand);
+      find('preview-size').addEventListener('click', () => {
+        const wide = find('design-canvas').classList.toggle('wide');
+        find('preview-size').textContent = wide ? '960 px' : '390 px';
+      });
+      find('design-tab').addEventListener('click', () => showDesign(true));
+      find('design-back').addEventListener('click', () => { showDesign(false); find('conversation-tab').focus(); });
+      find('conversation-tab').addEventListener('click', () => {
+        showDesign(false);
+        if (conversation !== 'main') send({ type: 'openConversation', conversation: 'main' });
+      });
+      find('discuss-design').addEventListener('click', () => {
+        if (send({ type: 'openConversation', conversation: 'design' })) showDesign(false);
+      });
+      find('retry').addEventListener('click', connect);
+      find('new-session').addEventListener('click', () => {
+        const available = listing.projects.filter(project => !project.isMissing);
+        if (available.length === 1) { openNewSheet(available[0]); return; }
+        showInfo('New session', ['Choose the project to work in.']);
+        for (const project of available) {
+          infoSheet.append(remoteButton('pill', project.name, () => { closeInfo(); openNewSheet(project); }));
+        }
+      });
+      document.querySelectorAll('.connection').forEach(node => node.addEventListener('click', () =>
+        showInfo(authenticated ? 'Connected to your Mac' : 'Connection unavailable', [scopeLabel || 'Waiting for authentication.',
+          'Keep your Mac awake and both devices on the same trusted Wi-Fi.',
+          pairingEnded ? 'Scan a fresh code from phone sharing on your Mac.' : 'Sessions run on your Mac. Your draft stays here if the connection drops.'])));
+      document.querySelectorAll('[data-filter]').forEach(node => node.addEventListener('click', () => {
+        filter = node.dataset.filter; renderDirectory(listing);
+      }));
+      find('search').addEventListener('input', event => { query = event.target.value; renderDirectory(listing); });
 
       composer.addEventListener('submit', event => {
         event.preventDefault();
@@ -1630,8 +1998,7 @@
       });
       stop.addEventListener('click', () => send({ type: 'stopTurn' }));
       back.addEventListener('click', () => {
-        renderAsk(undefined);
-        send({ type: 'closeSession' });
+        if (send({ type: 'closeSession' })) renderAsk(undefined);
       });
       bar.addEventListener('click', () => collapse(false));
       setInterval(renderElapsed, 15000);

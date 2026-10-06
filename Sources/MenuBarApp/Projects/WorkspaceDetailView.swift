@@ -112,25 +112,41 @@ struct WorkspaceDetailView: View {
     // where they should be. The verdict is the same one the rows below wear, gathered
     // into a single word so the page does not have to be scanned to learn that one
     // repository has drifted.
+    //
+    // Every reading here keeps its full width, so together they can be wider than the
+    // window. When they do not fit, the strip drops readings from the right instead of
+    // pushing the page wider than the window. What it drops is also on the rows
+    // below: each row has its own chips and a Reveal in Finder item in its menu.
     private func statusStrip(_ workspace: ProjectWorkspace) -> some View {
         let lead = store.project(workspace.leadProjectID)
-        return HStack(spacing: 14) {
+        return ViewThatFits(in: .horizontal) {
+            statusReadings(workspace, lead: lead, verdicts: true, revealLink: true)
+            statusReadings(workspace, lead: lead, verdicts: true, revealLink: false)
+            statusReadings(workspace, lead: lead, verdicts: false, revealLink: false)
+        }
+        .statusBand(padding: 24)
+    }
+
+    private func statusReadings(_ workspace: ProjectWorkspace, lead: Project?,
+                                verdicts: Bool, revealLink: Bool) -> some View {
+        HStack(spacing: 14) {
             StatusCaps(text: "WORKSPACE · \(workspace.projectIDs.count) PROJECTS",
                        tint: Theme.workspaceTint.ink)
             StatusRule()
             if let lead { leadTag(lead) }
-            freshnessVerdict(workspace)
-            uncommittedVerdict(workspace)
+            if verdicts {
+                freshnessVerdict(workspace)
+                uncommittedVerdict(workspace)
+            }
 
             Spacer(minLength: 12)
 
-            if let lead {
+            if revealLink, let lead {
                 InlineLink(title: "Reveal lead in Finder", size: 11.5) { reveal(lead) }
                     .fixedSize()
                     .layoutPriority(1)
             }
         }
-        .statusBand(padding: 24)
     }
 
     // The lead project reads as a path into it rather than as a label: it is the folder
@@ -144,12 +160,12 @@ struct WorkspaceDetailView: View {
                 Text(project.name)
                     .font(.mono(11, .semibold))
                     .lineLimit(1)
+                    .layoutPriority(1)
                 if let branch {
                     StatusDot()
                     StatusValue(text: branch, truncation: .middle)
                 }
             }
-            .fixedSize()
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -254,16 +270,10 @@ struct WorkspaceDetailView: View {
                             side: 36)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+                nameLine(project, workspace: workspace, spacing: 8, isLead: true) {
                     Text(project.name)
                         .font(.system(size: 15, weight: .semibold))
                         .lineLimit(1)
-                    MonoChip(text: "LEAD · WORKING DIRECTORY", size: 9, tint: Theme.accent)
-                    if store.isMissing(project) {
-                        MonoChip(text: "MISSING", size: 9, tint: Theme.deletion)
-                    }
-                    freshnessChip(project)
-                    uncommittedChip(project, workspace: workspace)
                 }
                 Text(summary(project, workspace: workspace))
                     .font(.mono(10.5))
@@ -300,15 +310,10 @@ struct WorkspaceDetailView: View {
                             side: 30)
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 7) {
+                nameLine(project, workspace: workspace, spacing: 7, isLead: false) {
                     Text(project.name)
                         .font(.system(size: 13.5, weight: .semibold))
                         .lineLimit(1)
-                    if store.isMissing(project) {
-                        MonoChip(text: "MISSING", size: 9, tint: Theme.deletion)
-                    }
-                    freshnessChip(project)
-                    uncommittedChip(project, workspace: workspace)
                 }
                 Text(summary(project, workspace: workspace))
                     .font(.mono(10.5))
@@ -341,6 +346,42 @@ struct WorkspaceDetailView: View {
         .animation(.easeOut(duration: 0.12), value: hoveredProjectID)
         .onHover { hovering(project, $0) }
         .appTooltip("Open \(project.name)")
+    }
+
+    // The chips keep their full width, so in a narrow pane they are dropped from the end
+    // rather than pushing the page wider than the window. The lead chip goes first, since
+    // the indent already says which project leads. A missing folder is always shown.
+    private func nameLine<Name: View>(_ project: Project, workspace: ProjectWorkspace,
+                                      spacing: CGFloat, isLead: Bool,
+                                      @ViewBuilder name: () -> Name) -> some View {
+        let name = name()
+        let missing = store.isMissing(project)
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: spacing) {
+                name
+                if isLead {
+                    MonoChip(text: "LEAD · WORKING DIRECTORY", size: 9, tint: Theme.accent)
+                }
+                if missing { MonoChip(text: "MISSING", size: 9, tint: Theme.deletion) }
+                freshnessChip(project)
+                uncommittedChip(project, workspace: workspace)
+            }
+            HStack(spacing: spacing) {
+                name
+                if missing { MonoChip(text: "MISSING", size: 9, tint: Theme.deletion) }
+                freshnessChip(project)
+                uncommittedChip(project, workspace: workspace)
+            }
+            HStack(spacing: spacing) {
+                name
+                if missing { MonoChip(text: "MISSING", size: 9, tint: Theme.deletion) }
+                freshnessChip(project)
+            }
+            HStack(spacing: spacing) {
+                name
+                if missing { MonoChip(text: "MISSING", size: 9, tint: Theme.deletion) }
+            }
+        }
     }
 
     private func hovering(_ project: Project, _ isInside: Bool) {

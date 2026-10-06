@@ -20,20 +20,29 @@ enum TaskRun {
     // then the configured default, and waits if a required value still has no answer.
     static func automaticValues(for task: Project) -> [String: String]? {
         guard let spec = task.task else { return [:] }
-        let inputs = TaskTemplate.inputs(in: spec)
-        let values = Dictionary(uniqueKeysWithValues: inputs.map { input in
+        guard unansweredInputs(in: spec).isEmpty else { return nil }
+        return startingValues(in: spec)
+    }
+
+    // The required inputs a scheduled run would have no answer for, so the schedule can
+    // say which ones need a default.
+    static func unansweredInputs(in spec: TaskSpec) -> [TaskInput] {
+        let values = startingValues(in: spec)
+        return TaskTemplate.inputs(in: spec).filter { input in
+            input.required && !input.isAnswered(values[TaskTemplate.key(input.name)] ?? "")
+        }
+    }
+
+    private static func startingValues(in spec: TaskSpec) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: TaskTemplate.inputs(in: spec).map { input in
             let key = TaskTemplate.key(input.name)
             return (key, spec.lastValues[key] ?? input.startingValue)
         })
-        guard inputs.allSatisfy({ input in
-            !input.required || input.isAnswered(values[TaskTemplate.key(input.name)] ?? "")
-        }) else { return nil }
-        return values
     }
 
     @discardableResult
     static func run(_ task: Project, values: [String: String] = [:], note: String = "",
-                    store: ProjectStore, runner: SessionRunner,
+                    scheduled: Bool = false, store: ProjectStore, runner: SessionRunner,
                     agentAvatarName: String?) -> Result<ChatSession, PersistenceFailure> {
         let spec = task.task
         let agent = spec?.agent ?? runner.agent
@@ -55,6 +64,7 @@ enum TaskRun {
             settings.copilotAccessMode = spec?.copilotAccessMode
             store.setSettings(settings, for: created.id)
             if !values.isEmpty { store.setTaskValues(values, for: created.id) }
+            if scheduled { store.markScheduledRun(created.id) }
             let prompt = prompt(for: spec, values: values, note: note)
             if !prompt.isEmpty {
                 runner.send(prompt, sessionID: created.id, store: store)

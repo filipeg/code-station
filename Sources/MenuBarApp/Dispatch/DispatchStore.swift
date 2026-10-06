@@ -131,6 +131,15 @@ final class DispatchStore {
         saver.schedule()
     }
 
+    func rename(_ id: UUID, to name: String) {
+        let name = name.trimmed
+        guard !name.isEmpty,
+              let index = requests.firstIndex(where: { $0.id == id }),
+              requests[index].name != name else { return }
+        requests[index].name = name
+        save()
+    }
+
     func remove(_ id: UUID) {
         requests.removeAll { $0.id == id }
         if selectedID == id { selectedID = nil }
@@ -196,12 +205,30 @@ final class DispatchStore {
         save()
     }
 
+    // A folder shows its requests in list order, so one moved into it goes to the end
+    // of the list and shows up last.
     func move(_ requestID: UUID, to folderID: UUID?) {
         guard let index = requests.firstIndex(where: { $0.id == requestID }) else { return }
         let folderID = validFolderID(folderID)
         guard requests[index].folderID != folderID else { return }
-        requests[index].folderID = folderID
+        var request = requests.remove(at: index)
+        request.folderID = folderID
+        requests.append(request)
         expandedFolderIDs.insert(folderID)
+        save()
+    }
+
+    // Puts a request right before or after another one, taking that one's folder.
+    func move(_ requestID: UUID, beside targetID: UUID, after: Bool) {
+        guard requestID != targetID,
+              requests.contains(where: { $0.id == targetID }),
+              let index = requests.firstIndex(where: { $0.id == requestID }) else { return }
+        let original = requests
+        var request = requests.remove(at: index)
+        let targetIndex = requests.firstIndex { $0.id == targetID }!
+        request.folderID = requests[targetIndex].folderID
+        requests.insert(request, at: after ? targetIndex + 1 : targetIndex)
+        guard requests != original else { return }
         save()
     }
 

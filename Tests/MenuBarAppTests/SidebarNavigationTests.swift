@@ -135,6 +135,42 @@ struct SidebarNavigationTests {
         #expect(scroll.documentVisibleRect.minY == landed)
     }
 
+    // Cards are built only as they near the screen, so one far down an unfolded list
+    // does not exist yet when it is opened from elsewhere. The rail still has to travel
+    // to it, past the row it hangs under.
+    @Test func aCardFarDownAnUnfoldedListIsScrolledToWhenOpenedFromElsewhere() async throws {
+        let expansion = Preferences.sidebarExpansion()
+        defer { Preferences.setSidebarExpansion(expansion) }
+        let harness = try SidebarHarness()
+        defer { harness.close() }
+        let project = try TestStore.project(in: harness.store, named: "big")
+        for _ in 1...40 { _ = harness.store.newSession(in: project.id) }
+        Preferences.setSidebarExpansion([project.id: true])
+        harness.store.selectHome()
+        harness.mount()
+        await harness.settle()
+
+        // See-more is the last row of the list, so it sits just above the list's own
+        // bottom padding.
+        let scroll = try #require(harness.scrollView)
+        let document = try #require(scroll.documentView)
+        let listBottom = document.convert(NSPoint(x: document.bounds.midX,
+                                                  y: document.isFlipped ? document.bounds.maxY : 0),
+                                          to: nil)
+        try harness.click(x: listBottom.x, yFromTop: 820 - listBottom.y - 24)
+        await harness.settle()
+        #expect(scroll.documentVisibleRect.minY == 0)
+        #expect(document.bounds.height > scroll.documentVisibleRect.height * 2)
+
+        let target = try #require(harness.store.standaloneSessions(for: project.id).last)
+        harness.store.selectSession(target.id)
+        await harness.settle()
+        #expect(harness.store.selection == .session(target.id))
+        #expect(harness.store.sessionToReveal == nil)
+        // The oldest card is the last one in the list.
+        #expect(scroll.documentVisibleRect.maxY >= document.bounds.maxY - 14)
+    }
+
     @Test func externalWorkspaceNavigationRevealsItsParentAndRecoversFromAFilter() async throws {
         let expansion = Preferences.sidebarExpansion()
         let groups = Preferences.collapsedSidebarGroups()

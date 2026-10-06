@@ -109,6 +109,16 @@ enum FileTree {
         var failures: [CopyFailure] = []
     }
 
+    struct Move: Sendable, Equatable {
+        let from: URL
+        let to: URL
+    }
+
+    struct MoveResult: Sendable, Equatable {
+        var moved: [Move] = []
+        var failures: [CopyFailure] = []
+    }
+
     // Past this the file is named and sized but not opened. The text view lays out only
     // what is on screen, so length costs little, but the whole file is still held in
     // memory twice over while it is open.
@@ -285,6 +295,142 @@ enum FileTree {
         }.value
     }
 
+    // The Trash rather than a real delete, so a slip in the tree can be undone from Finder.
+    // Returns why it failed, or nil once the item is gone.
+    static func trash(_ url: URL) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            do {
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }.value
+    }
+
+    // Unlike a copy, a move never picks a new name: the item is meant to arrive as itself,
+    // so a name already taken in the folder is refused rather than replaced.
+    static func move(_ sources: [URL], into directory: URL) async -> MoveResult {
+        await Task.detached(priority: .userInitiated) {
+            let files = FileManager.default
+            let target = directory.standardizedFileURL.path
+            var result = MoveResult()
+            for source in sources {
+                let path = source.standardizedFileURL.path
+                let name = source.lastPathComponent
+                // Let go where it started, or on itself: nothing to do.
+                if target == path
+                    || source.deletingLastPathComponent().standardizedFileURL.path == target {
+                    continue
+                }
+                guard !target.hasPrefix(path + "/") else {
+                    result.failures.append(CopyFailure(
+                        name: name, message: "A folder cannot be moved into itself."))
+                    continue
+                }
+                let destination = directory.appendingPathComponent(name)
+                // Read without following links, so a broken link already sitting there
+                // still counts as taken.
+                guard (try? files.attributesOfItem(atPath: destination.path)) == nil else {
+                    result.failures.append(CopyFailure(
+                        name: name, message: "Something called \(name) is already in that folder."))
+                    continue
+                }
+                do {
+                    try files.moveItem(at: source, to: destination)
+                    result.moved.append(Move(from: source, to: destination))
+                } catch {
+                    result.failures.append(CopyFailure(name: name,
+                                                       message: error.localizedDescription))
+                }
+            }
+            return result
+        }.value
+    }
+
+    enum CreateResult: Equatable {
+        case created(URL)
+        case failed(String)
+    }
+
+    // A placeholder name, the way Finder does it, so the item exists at once and is then
+    // renamed in place. A name already in use gets a number.
+    static func create(folder: Bool, in directory: URL) async -> CreateResult {
+        await Task.detached(priority: .userInitiated) {
+            let files = FileManager.default
+            let base = folder ? "untitled folder" : "untitled"
+            var url = directory.appendingPathComponent(base, isDirectory: folder)
+            var number = 2
+            while files.fileExists(atPath: url.path) {
+                url = directory.appendingPathComponent("\(base) \(number)", isDirectory: folder)
+                number += 1
+            }
+            do {
+                if folder {
+                    try files.createDirectory(at: url, withIntermediateDirectories: false)
+                } else {
+                    try Data().write(to: url, options: .withoutOverwriting)
+                }
+                return .created(url)
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        }.value
+    }
+
+    enum RenameResult: Equatable {
+        case renamed(URL)
+        case unchanged
+        case failed(String)
+    }
+
+    static func rename(_ url: URL, to name: String) async -> RenameResult {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name != url.lastPathComponent else { return .unchanged }
+        guard !name.isEmpty else { return .failed("A name cannot be empty.") }
+        guard name != ".", name != "..", !name.contains("/") else {
+            return .failed("A name cannot contain \"/\" or be \".\" or \"..\".")
+        }
+
+        return await Task.detached(priority: .userInitiated) {
+            let files = FileManager.default
+            let destination = url.deletingLastPathComponent().appendingPathComponent(name)
+            // On a disk that ignores case, a change of case alone finds the item itself.
+            let onlyCaseChanges = name.lowercased() == url.lastPathComponent.lowercased()
+            if !onlyCaseChanges, files.fileExists(atPath: destination.path) {
+                return .failed("Something called \(name) is already in this folder.")
+            }
+            do {
+                if onlyCaseChanges {
+                    // Moving straight onto a name the disk already counts as taken can be
+                    // refused, so the item steps through a name nothing else can have.
+                    let step = url.deletingLastPathComponent()
+                        .appendingPathComponent(".\(UUID().uuidString)")
+                    try files.moveItem(at: url, to: step)
+                    do {
+                        try files.moveItem(at: step, to: destination)
+                    } catch {
+                        try? files.moveItem(at: step, to: url)
+                        throw error
+                    }
+                } else {
+                    try files.moveItem(at: url, to: destination)
+                }
+                return .renamed(destination)
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        }.value
+    }
+
+    // Where a path ends up once the item at `old` is called `new`: the item itself and
+    // everything inside it move, anything else stays put.
+    static func path(_ path: String, afterMoving old: String, to new: String) -> String {
+        if path == old { return new }
+        guard path.hasPrefix(old + "/") else { return path }
+        return new + path.dropFirst(old.count)
+    }
+
     private static func availableCopyURL(for source: URL, isDirectory: Bool,
                                          in directory: URL, files: FileManager) -> URL {
         let original = directory.appendingPathComponent(source.lastPathComponent,
@@ -381,9 +527,9 @@ extension Data {
     var looksBinary: Bool {
         let head = prefix(8000)
         if head.contains(0) { return true }
-        // A multi-byte character can straddle the cut, so allow a few bytes of slack.
-        for drop in 0...3 where head.count > drop {
-            if String(data: head.dropLast(drop), encoding: .utf8) != nil { return false }
+        // Complete a character cut by the sample without hiding invalid trailing bytes.
+        for end in head.count...Swift.min(count, head.count + 3) {
+            if String(data: prefix(end), encoding: .utf8) != nil { return false }
         }
         return true
     }

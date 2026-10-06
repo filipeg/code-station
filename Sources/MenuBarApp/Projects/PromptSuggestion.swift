@@ -102,8 +102,8 @@ enum PromptSuggestion {
         return String(clean.suffix(2_000))
     }
 
-    // The CLIs with no prediction of their own are asked on their cheapest model, since
-    // the job is a sentence of plain text rather than anything needing reasoning.
+    // Claude and Copilot offer lightweight aliases. Codex uses the session model so
+    // a separate global CLI default cannot break an otherwise working conversation.
     static func quickModel(for agent: AgentKind) -> String? {
         switch agent {
         case .claudeCode: "haiku"
@@ -112,7 +112,7 @@ enum PromptSuggestion {
         }
     }
 
-    static func arguments(for agent: AgentKind, prompt: String) -> [String] {
+    static func arguments(for agent: AgentKind, prompt: String, model: String? = nil) -> [String] {
         switch agent {
         case .claudeCode:
             // Here for completeness. A Claude Code session reads the CLI's own prediction
@@ -128,7 +128,7 @@ enum PromptSuggestion {
             var arguments = ["exec", "--json", "--skip-git-repo-check",
                              "--sandbox", "read-only",
                              "-c", #"approval_policy="never""#]
-            if let model = quickModel(for: agent) { arguments += ["-m", model] }
+            if let model { arguments += ["-m", model] }
             arguments.append(prompt)
             return arguments
 
@@ -143,46 +143,40 @@ enum PromptSuggestion {
     // Nil whenever anything at all goes wrong. Nothing depends on this answering, and a
     // failure here must never reach the session it was asked about.
     static func read(agent: AgentKind, at path: String, searchPath: String,
-                     workingDirectory: String, prompt: String) async -> String? {
+                     workingDirectory: String, prompt: String, model: String? = nil) async -> String? {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = searchPath
 
-        let collected = Collector(agent: agent)
+        // A line handler keeps stdin open for replies. Codex drains stdin before
+        // starting even with a prompt argument, so collect its output after exit.
         guard let output = try? await CommandRunner.run(
             executable: path,
-            arguments: arguments(for: agent, prompt: prompt),
+            arguments: arguments(for: agent, prompt: prompt, model: model),
             currentDirectory: URL(fileURLWithPath: workingDirectory),
             environment: environment,
-            outputLineHandler: collected.receive,
             timeout: .seconds(45),
             outputByteLimit: 262_144
-        ), output.succeeded else { return nil }
-        return cleaned(collected.text)
-    }
-
-    // The three CLIs answer in three dialects, all of which the app already reads, so the
-    // run is folded onto the same events a turn produces and the text is taken off those.
-    private final class Collector: @unchecked Sendable {
-        private let lock = NSLock()
-        private let agent: AgentKind
-        private let copilot = CopilotStream()
-        private var parts: [String] = []
-
-        init(agent: AgentKind) { self.agent = agent }
-
-        var text: String { lock.withLock { parts.joined(separator: " ") } }
-
-        func receive(_ line: String) -> CommandRunner.OutputLineAction {
-            let events = switch agent {
-            case .claudeCode: StreamEvent.parse(line)
-            case .codex: StreamEvent.parseCodex(line)
-            case .copilot: copilot.parse(line)
-            }
-            lock.withLock {
-                for case .text(let text) in events { parts.append(text) }
-            }
-            return .none
+        ) else {
+            SessionLog.note("\(agent.command) prompt suggestion command did not complete")
+            return nil
         }
+        guard output.succeeded, !output.outputTruncated else {
+            SessionLog.note("\(agent.command) prompt suggestion failed status=\(output.status) "
+                            + "truncated=\(output.outputTruncated)")
+            return nil
+        }
+
+        let copilot = CopilotStream()
+        var parts: [String] = []
+        for line in output.output.split(separator: "\n") {
+            let events = switch agent {
+            case .claudeCode: StreamEvent.parse(String(line))
+            case .codex: StreamEvent.parseCodex(String(line))
+            case .copilot: copilot.parse(String(line))
+            }
+            for case .text(let text) in events { parts.append(text) }
+        }
+        return cleaned(parts.joined(separator: " "))
     }
 }
 

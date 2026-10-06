@@ -35,26 +35,47 @@ enum SessionRemoval {
     static func confirmation(for session: ChatSession, in store: ProjectStore,
                              workingTrees: WorkingTreeWatch,
                              onConfirm: @escaping () -> Void) -> Dialog {
-        let worktrees = store.checkoutProjects(for: session).compactMap(\.worktreePath)
+        let checkouts = store.checkoutProjects(for: session)
+        let worktrees = checkouts.compactMap(\.worktreePath)
         let dirty = worktrees.count { workingTrees.isDirty($0) }
         let removesDesign = store.hasDesignArtifacts(for: session)
-        let isTaskRun = store.project(session.projectID)?.kind == .adHoc
+        let project = store.project(session.projectID)
+        let isTaskRun = project?.kind == .adHoc
 
-        var consequences = ["Its conversation history is removed from the app."]
-        if isTaskRun {
-            consequences.append("Files it wrote in the task folder stay.")
-        }
+        var rows = [Dialog.Impact.Row(title: "Conversation history",
+                                      detail: "Removed from Code Station.")]
         if removesDesign {
-            consequences.append("Its generated Design files are permanently removed.")
+            rows.append(.init(title: "Generated Design files", detail: "Permanently removed."))
         }
         if !worktrees.isEmpty {
-            consequences.append(
-                "Its \(counted(worktrees.count, "worktree")) \(worktrees.count == 1 ? "goes" : "go") with it."
+            rows.append(.init(
+                title: counted(worktrees.count, "worktree"),
+                detail: "Removed from disk."
                     + (dirty > 0
                        ? " \(dirty) \(dirty == 1 ? "has" : "have") uncommitted changes that will be lost."
-                       : " Branches are kept if they have unmerged commits."))
+                       : " Branches are kept if they have unmerged commits.")))
+        }
+        if isTaskRun {
+            rows.append(.init(title: "Task folder stays",
+                              detail: "Files this run wrote in it are kept.", kept: true))
+        } else {
+            // A checkout without a worktree is the project folder itself, which the session
+            // only borrowed.
+            let shared = checkouts.filter { $0.worktreePath == nil }
+                .compactMap { store.project($0.projectID)?.collapsedPath }
+            if !shared.isEmpty {
+                rows.append(.init(title: shared.count == 1 ? "Project folder stays" : "Project folders stay",
+                                  detail: shared.joined(separator: "\n"), kept: true))
+            }
         }
 
+        let subject: Dialog.Impact.Subject? = if let workspace = session.workspaceID.flatMap(store.workspace) {
+            .init(name: workspace.name, kind: .workspace)
+        } else if let project {
+            .init(name: project.name, kind: isTaskRun ? .task : .project)
+        } else {
+            nil
+        }
         let deleteLabel = if isTaskRun {
             "Delete run"
         } else if removesDesign {
@@ -62,9 +83,13 @@ enum SessionRemoval {
         } else {
             worktrees.isEmpty ? "Delete session" : "Delete session and worktrees"
         }
-        return .confirm("Delete \"\(session.title)\"?",
-                        message: consequences.joined(separator: " "),
-                        action: deleteLabel, handler: onConfirm)
+        return .impact("Delete \"\(session.title)\"?",
+                       message: "This \(isTaskRun ? "run" : "session") will leave Code Station.",
+                       subject: subject, rows: rows,
+                       warning: dirty > 0
+                           ? "Uncommitted changes and conversation history cannot be restored."
+                           : "Conversation history cannot be restored.",
+                       action: deleteLabel, handler: onConfirm)
     }
 
     // Removes each session, keeping going after one refuses so that a single session still

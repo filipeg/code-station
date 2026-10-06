@@ -87,8 +87,8 @@ enum AgentKind: String, CaseIterable, Codable, Sendable, Identifiable {
         }
     }
 
-    // Whether the CLI can be asked a permission question mid-turn. The others run each
-    // turn to the end with the access they were started with.
+    // Whether tool access can be approved interactively. Codex and Copilot keep the
+    // access policy chosen in settings, even though their servers accept follow-ups.
     var asksPermissions: Bool { self == .claudeCode }
 
     // Whether the CLI predicts the next prompt itself and reports it on its stream. The
@@ -183,9 +183,8 @@ enum CodexSandboxMode: String, CaseIterable {
     }
 }
 
-// Copilot's prompt mode cannot ask a question back either, so a turn runs with the
-// access it was started with. Tools always run without asking - the CLI refuses to run
-// a prompt otherwise - and the choice is how far past the session's folders they reach.
+// Copilot tools run with the access policy selected for the session. The server
+// enforces the same path and URL limits for initial prompts and follow-ups.
 enum CopilotAccessMode: String, CaseIterable {
     case workspace = "workspace"
     case fullAccess = "full-access"

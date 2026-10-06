@@ -44,6 +44,8 @@ swift test --disable-sandbox --filter GitActionsTests
 
 Tests live in `Tests/MenuBarAppTests`. They cover session and transcript behavior, CLI stream parsing, Git and worktree operations, terminal and PTY integration, file browsing, Dispatch and OAuth flows, skills, settings, persistence, and UI-facing presentation logic.
 
+Live background-task tests are opt-in because they use the installed agents and their signed-in accounts. They start `sleep 600`, send a follow-up, and cancel the task. Set `CODE_STATION_LIVE_AGENT_TESTS=1` and filter to `AgentSessionLiveTests`; optionally set `CODE_STATION_LIVE_AGENT=codex` or `copilot` to test only one. Codex uses an account-advertised model for this disposable test. Normal test runs use protocol fixtures and make no model calls.
+
 Add tests for behavior and business logic. Trivial view wiring, accessors, and framework behavior do not need dedicated tests.
 
 ## Project structure
@@ -78,7 +80,9 @@ Keep organisation-specific hostnames, client IDs, and repository URLs in that fi
 
 A project is a reference to a folder on disk. A workspace is a reusable group of projects with one lead project. When a session starts, it records its own project paths and worktree choices so later workspace edits do not change an existing conversation.
 
-`SessionRunner` launches the selected `claude`, `codex` or `copilot` executable and reads its JSONL stream. The Claude, Codex and Copilot adapters normalize their different protocols into shared `StreamEvent` values. The rest of the app can then render messages, tool calls, permission requests, usage, and completion state without agent-specific branches.
+`SessionRunner` launches the selected agent in its own process group. Claude uses its streaming CLI protocol, Codex uses `app-server` JSON-RPC, and Copilot uses its headless server with Content-Length framing. The adapters normalize these protocols into shared `StreamEvent` values for the transcript and session state.
+
+A server stays open while the agent has background work. Task lists are refreshed every five seconds while waiting, and Copilot also reports task changes. Follow-up messages use that same conversation. Ending the wait asks the agent to cancel its tasks before closing the process and cleaning up its process groups. The selected model, workspace roots, access limits, and disabled MCP servers carry into the server session. See [the persistent agent sessions decision](adr/0001-persistent-agent-sessions.md).
 
 Git worktree sessions use a checkout and branch owned by that session. Workspace sessions may create a separate worktree for each Git project. A session using a project folder edits that folder directly. Git inspection is kept separate from the commands that switch, commit, pull, and push.
 

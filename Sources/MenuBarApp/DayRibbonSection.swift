@@ -20,15 +20,21 @@ struct DayRibbonSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionRule(title: "WHERE THE DAY WENT") {
-                if !ribbon.isEmpty { headline }
+            ViewThatFits(in: .horizontal) {
+                HStack { Text("A day in parallel").font(.serif(20)); Spacer(); headline }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("A day in parallel").font(.serif(20))
+                    headline
+                }
             }
             card
+            Text("Last 24 hours · Summed session time, including parallel work")
+                .font(.system(size: 10.5)).foregroundStyle(.secondary)
         }
     }
 
     private var headline: some View {
-        (Text(DayRibbon.duration(ribbon.spent))
+        (Text(scanned ? DayRibbon.duration(ribbon.spent) : "Counting…")
             .font(.mono(11.5, .semibold))
             .foregroundStyle(Color.primary)
             + Text(verbatim: " of session time · \(counted(ribbon.legend.count, "project"))")
@@ -81,6 +87,19 @@ struct DayRibbonSection: View {
         .frame(height: Self.bandHeight)
         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.sunken))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        .accessibilityRepresentation {
+            VStack {
+                ForEach(ribbon.blocks) { block in
+                    Button {
+                        onOpen(block.sessionID)
+                    } label: {
+                        Text("\(block.start.formatted(date: .abbreviated, time: .shortened)), \(block.subject.name), \(block.title), \(DayRibbon.duration(block.seconds))")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens this session")
+                }
+            }
+        }
     }
 
     // Midnight inside a rolling 24 hours, so the half of the band that belongs to

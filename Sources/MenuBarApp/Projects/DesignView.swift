@@ -1,23 +1,31 @@
 import AppKit
 import SwiftUI
 
-// A Design conversation keeps the agent loop on the left and turns its durable HTML
-// artifact into a live canvas on the right.
+// History and the composer share one floating surface over the canvas.
 struct DesignView: View {
+    @Environment(AppSettings.self) private var appSettings
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(MenuPresenter.self) private var menus
     @Environment(\.textScale) private var textScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let sessionID: UUID
     var onOpenImplementation: (() -> Void)? = nil
 
     @State private var canvas = DesignCanvas()
     @State private var composerFocused = false
-    @State private var conversationWidth = DesignSplitLayout.defaultConversationWidth
-    @State private var dragStartConversationWidth: CGFloat?
-    @State private var displayedRevisionID: UUID?
-    @State private var comparingWithLive = false
+    @FocusState private var conversationToggleFocused: Bool
+    @State private var conversationExpanded = false
+    @State private var conversationMinimized = false
+    @State private var hasOpenedConversation = false
+    @State private var transcriptAtBottom = true
+    @State private var transcriptPosition = ScrollPosition(edge: .bottom)
+    @State private var transcriptOffset: CGFloat = 0
+    @State private var expandedTranscriptOffset: CGFloat?
+    @State private var composerHeight: CGFloat = 167
+    @State private var transcriptHeight: CGFloat = .infinity
     @State private var selectionEnabled = false
     @State private var snapshotRequest: DesignSnapshotRequest?
     @State private var preparingHandoff = false
@@ -27,32 +35,21 @@ struct DesignView: View {
     var body: some View {
         if let session = store.session(sessionID),
            let artifactURL = store.designArtifactURL(for: session) {
-            let liveDirectory = artifactURL.deletingLastPathComponent()
-            let displayedDirectory = displayedDirectory(for: session, live: liveDirectory)
-            GeometryReader { geometry in
-                let width = DesignSplitLayout.conversationWidth(
-                    conversationWidth, availableWidth: geometry.size.width)
-
-                ZStack(alignment: .leading) {
-                    HStack(spacing: 0) {
-                        conversation(session, width: width)
-                            .frame(width: width)
-                            .clipped()
-                        Divider().overlay(Theme.hairline)
-                        canvasPane(session, directory: displayedDirectory,
-                                   liveDirectory: liveDirectory)
-                    }
-
-                    splitHandle(conversationWidth: width,
-                                availableWidth: geometry.size.width)
-                        .offset(x: width - DesignSplitLayout.handleWidth / 2)
-                }
-            }
+            let directory = artifactURL.deletingLastPathComponent()
+            canvasColumn(session, directory: directory)
             .onAppear {
                 store.hold(sessionID, for: .open)
                 AppNotifier.shared.clear(
                     sessionID: store.userFacingSessionID(for: sessionID))
-                composerFocused = true
+                // A design that already exists is what the user came back to look at,
+                // so the panel starts as a small tab instead of covering it.
+                if DesignArtifactRevision.read(directory) != nil {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { conversationMinimized = true }
+                } else {
+                    composerFocused = true
+                }
             }
             .onDisappear {
                 store.release(sessionID, for: .open)
@@ -60,7 +57,7 @@ struct DesignView: View {
                 designWindow.close()
             }
             .task(id: sessionID) { await store.transcriptReady(sessionID) }
-            .task(id: displayedDirectory.path) { await canvas.watch(displayedDirectory) }
+            .task(id: directory.path) { await canvas.watch(directory) }
         } else {
             PaneMessage(icon: "paintbrush.pointed",
                         title: "This Design session is gone",
@@ -68,131 +65,266 @@ struct DesignView: View {
         }
     }
 
-    private func displayedDirectory(for session: ChatSession, live: URL) -> URL {
-        guard let displayedRevisionID,
-              let revision = session.designRevisions.first(where: { $0.id == displayedRevisionID })
-        else { return live }
-        return DesignArtifacts.materialsDirectory(revision, designDirectory: live)
+    private var latestPromptID: UUID? {
+        store.session(sessionID)?.messages.last(where: { $0.role == .user })?.id
     }
 
     // MARK: - Conversation
 
-    private func conversation(_ session: ChatSession, width: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "paintbrush.pointed.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                Text("DESIGN")
-                    .font(.mono(10, .semibold))
-                    .kerning(1)
-                Spacer(minLength: 8)
-                designState
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 38)
-            .background(Theme.card)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(Theme.hairline).frame(height: 1)
+    private func floatingConversation(_ session: ChatSession, size: CGSize) -> some View {
+        let panelSize = DesignConversationLayout.size(in: size, expanded: conversationExpanded,
+                                                      minimized: conversationMinimized, composerHeight: composerHeight,
+                                                      transcriptHeight: transcriptHeight)
+        let footerHeight = min(composerHeight, max(0, panelSize.height - DesignConversationLayout.headerHeight))
+        let needsYou = runner.question(sessionID) != nil || runner.waitIsStale(sessionID)
+            || hasTurnEndAction(runner.state(sessionID))
+        return VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Button {
+                    conversationExpanded.toggle()
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "bubble.left")
+                            .foregroundStyle(Theme.accent)
+                        Text("Conversation")
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer(minLength: 4)
+                        if needsYou {
+                            StateLight(tone: .needsYou, size: 6)
+                            Text("Needs you").foregroundStyle(Theme.attentionText)
+                        } else if runner.state(sessionID).isBusy {
+                            StateLight(tone: .running, size: 6)
+                            Text("Working").foregroundStyle(.secondary)
+                        } else {
+                            Text(conversationExpanded ? "Collapse" : "Expand")
+                                .foregroundStyle(.secondary)
+                        }
+                        Image(systemName: conversationExpanded ? "chevron.down" : "arrow.up.left.and.arrow.down.right")
+                    }
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 18)
+                    .frame(height: DesignConversationLayout.headerHeight)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable()
+                .focused($conversationToggleFocused)
+                .focusEffectDisabled()
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    conversationExpanded.toggle()
+                    return .handled
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(conversationToggleFocused ? Theme.accent : .clear, lineWidth: 2)
+                        .padding(4)
+                        .allowsHitTesting(false)
+                }
+                .accessibilityLabel("Conversation")
+                .accessibilityValue((conversationExpanded ? "Expanded" : "Collapsed")
+                    + (needsYou ? ", needs you" : runner.state(sessionID).isBusy ? ", working" : ""))
+                .accessibilityHint(conversationExpanded ? "Collapse the transcript" : "Expand the transcript")
             }
 
-            designTranscript(session, width: width)
+            transcript(session, width: panelSize.width)
+                .frame(width: panelSize.width,
+                       height: max(0, panelSize.height - DesignConversationLayout.headerHeight - footerHeight))
+                .clipped()
             Divider().overlay(Theme.hairline)
-            designComposer(session)
+            ScrollView {
+                VStack(spacing: 0) {
+                    turnNotices(session)
+                    designComposer(session)
+                    SessionRunSettingsControls(sessionID: sessionID, wraps: true)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 12)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: .infinity)
         }
-        .background(Theme.background)
+        // The panel stays built while it is small, so the transcript keeps its scroll
+        // position and the composer keeps its text.
+        .opacity(conversationMinimized ? 0 : 1)
+        .allowsHitTesting(!conversationMinimized)
+        .accessibilityHidden(conversationMinimized)
+        .overlay {
+            if conversationMinimized {
+                minimizedConversation(session, needsYou: needsYou)
+            }
+        }
+        .frame(width: panelSize.width, height: panelSize.height)
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 17))
+        .overlay {
+            RoundedRectangle(cornerRadius: 17).stroke(Theme.border, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 8)
+        .background(DesignConversationDismissal(
+            expanded: conversationExpanded,
+            minimized: conversationMinimized,
+            footerHeight: footerHeight,
+            enabled: dialogs.current == nil && !menus.isOpen,
+            collapse: { keyboard in
+                conversationExpanded = false
+                // A press outside shrinks the panel to a small tab, so the canvas gets back
+                // as much room as it can. Escape only steps back one level.
+                if keyboard {
+                    composerFocused = false
+                    conversationToggleFocused = true
+                } else {
+                    composerFocused = false
+                    conversationMinimized = true
+                }
+            },
+            expand: {
+                conversationExpanded = true
+            }))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationMinimized)
     }
 
-    private var designState: some View {
-        let tone = SessionTone(sessionID, store: store, runner: runner)
-        return HStack(spacing: 6) {
-            StateLight(tone: tone, size: 6)
-            Text(tone.word)
-                .font(.mono(9.5, .semibold))
-                .foregroundStyle(tone.colour)
+    // A button as well as a hover target, so the panel can be brought back by keyboard
+    // and by assistive tools too.
+    //
+    // While the session is alive the bubble gives way to the session's bot, ringed in the
+    // state colour, and the bot breathes while a turn is being worked on, the way its
+    // avatar does in the sidebar. An idle tab keeps the bubble, so it looks as it always has.
+    private func minimizedConversation(_ session: ChatSession, needsYou: Bool) -> some View {
+        let tone: SessionTone = needsYou ? .needsYou
+            : runner.waitingSince(sessionID) != nil ? .waiting
+            : runner.state(sessionID).isBusy ? .running : .idle
+        let bot = AgentAvatarSelection.avatar(named: session.agentAvatarName, from: appSettings.agentAvatars)
+        return Button {
+            conversationMinimized = false
+        } label: {
+            HStack(spacing: 10) {
+                if tone == .idle {
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.accent)
+                } else {
+                    Breathing(active: tone == .running) { phase in
+                        AgentAvatarView(image: bot.displayImage(for: sessionID), size: 30)
+                            .opacity(1 - 0.45 * phase)
+                    }
+                    .overlay(Circle().stroke(tone.colour, lineWidth: 1.5).padding(-3))
+                    .padding(.leading, -4)
+                    .accessibilityHidden(true)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Conversation")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(DesignConversationLayout.minimizedHint(tone))
+                        .font(.system(size: 11, weight: tone == .idle ? .regular : .medium))
+                        .foregroundStyle(tone.band?.word ?? Color.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
         }
-        .fixedSize()
+        .buttonStyle(.plain)
+        .onHover { inside in
+            if inside { conversationMinimized = false }
+        }
+        .accessibilityLabel("Conversation")
+        .accessibilityValue(DesignConversationLayout.minimizedAccessibilityValue(tone))
+        .accessibilityHint("Show the conversation")
     }
 
-    private func designTranscript(_ session: ChatSession, width: CGFloat) -> some View {
-        let state = runner.state(sessionID)
+    private func transcript(_ session: ChatSession, width: CGFloat) -> some View {
         let projectPath = store.workingDirectory(for: session) ?? ""
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if session.messages.isEmpty, !store.isTranscriptLoading(sessionID) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("What should we design?")
-                                .font(.serif(17))
-                            Text("Describe a screen, flow, prototype, deck, diagram, or visual. "
-                                 + "The agent will study this project and build it on the canvas.")
-                                .font(.system(size: 12.5))
+                    if session.messages.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("What would you like to design?")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("Describe a screen, or attach a reference to get started.")
+                                .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-
                     ForEach(session.messages) { message in
                         MessageView(message: message,
                                     projectPath: projectPath,
                                     textScale: textScale,
-                                    availableWidth: width - 32)
+                                    availableWidth: width - 28)
                             .equatable()
                             .environment(\.runningAgents, runner.runningAgents(sessionID))
                             .environment(\.activeTranscriptTools, runner.runningTools(sessionID))
                     }
 
-                    if let request = runner.question(sessionID) {
-                        PermissionCard(request: request,
-                                       workingDirectories: store.session(sessionID)
-                                           .map(store.workingDirectories(for:)) ?? [],
-                                       projectPath: projectPath) { answer in
-                            runner.answer(request, with: answer,
-                                          sessionID: sessionID, store: store)
-                        }
-                        .id(request.id)
-                    }
-
-                    if state.isBusy, runner.question(sessionID) == nil {
+                    if runner.state(sessionID).isBusy, runner.question(sessionID) == nil {
                         designStatus(session)
                     }
 
-                    if state == .waiting, !waitNoticeDismissed,
-                       let waitingSince = runner.waitingSince(sessionID) {
-                        WaitingNotice(since: waitingSince,
-                                      tasks: runner.backgroundTasks(sessionID),
-                                      agentTitle: session.agent.title,
-                                      command: { session.shellCommand(for: $0) },
-                                      onKeepWaiting: { waitNoticeDismissed = true },
-                                      onEnd: { runner.endWait(sessionID) })
-                    }
-
-                    TurnEndActions(sessionID: sessionID, state: state)
-
                     Color.clear.frame(height: 1).id("design-transcript-bottom")
                 }
-                .padding(16)
+                .padding(14)
+                .modifier(SentPromptCommands(agent: session.agent,
+                                             workingDirectories: store.workingDirectories(for: session),
+                                             latestPromptID: latestPromptID))
             }
             .defaultScrollAnchor(.bottom)
-            // Anything new - a row, streamed text, a call, a question, a change of state -
-            // sends the transcript to its end.
-            .onChange(of: transcriptShape(session)) {
-                proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+            .scrollPosition($transcriptPosition)
+            .onChange(of: conversationExpanded) { _, expanded in
+                if expanded {
+                    if !hasOpenedConversation {
+                        proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+                    }
+                    hasOpenedConversation = true
+                } else {
+                    expandedTranscriptOffset = transcriptOffset
+                }
             }
-            // A dismissed notice is dismissed for that wait only: the next one is a new
-            // turn parked on new tasks, and it has its own case to make.
-            .onChange(of: state) { _, state in
-                if state != .waiting { waitNoticeDismissed = false }
+            .task(id: conversationExpanded) {
+                guard conversationExpanded, let offset = expandedTranscriptOffset else { return }
+                // Restore after the width transition has finished reflowing message text.
+                if !reduceMotion { try? await Task.sleep(for: .milliseconds(280)) }
+                guard !Task.isCancelled else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { transcriptPosition.scrollTo(y: offset) }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
+                transcriptOffset = offset
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
+                transcriptHeight = height
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height - geometry.visibleRect.maxY < 28
+            } action: { _, atBottom in
+                transcriptAtBottom = atBottom
+            }
+            .onChange(of: transcriptShape(session)) {
+                if transcriptAtBottom {
+                    proxy.scrollTo("design-transcript-bottom", anchor: .bottom)
+                }
+            }
+            // A new prompt always goes to the end, even when the user had scrolled back
+            // or the composer growing while they typed pushed the end out of view. The
+            // scroll waits a turn so the new message is laid out before it runs.
+            .onChange(of: latestPromptID) {
+                transcriptAtBottom = true
+                Task { proxy.scrollTo("design-transcript-bottom", anchor: .bottom) }
             }
         }
     }
 
-    // What the agent is doing, under the transcript. A held-open turn looks exactly like
-    // a working one from the outside, so a wait names the task keeping it open instead of
-    // going on claiming the canvas is being worked on. Once the wait has gone stale the
-    // line drops the live colour too: nothing is coming back from that task, and the pane
-    // has to agree with the NEEDS YOU the header is already showing.
+    // What the agent is doing, under the conversation. A held-open turn looks exactly
+    // like a working one from the outside, so a wait names the task keeping it open
+    // instead of going on claiming the canvas is being worked on. Once the wait has gone
+    // stale the line drops the live colour too: nothing is coming back from that task,
+    // and the pane has to agree with the NEEDS YOU the header is already showing.
     @ViewBuilder
     private func designStatus(_ session: ChatSession) -> some View {
         if let waitingSince = runner.waitingSince(sessionID) {
@@ -200,12 +332,12 @@ struct DesignView: View {
             let tasks = runner.backgroundTasks(sessionID)
             // Nothing arrives to redraw a parked turn, so the wait has to count itself up.
             TimelineView(.periodic(from: .now, by: 1)) { _ in
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     StateLight(tone: stale ? .needsYou : .waiting, size: 6)
                     Text(stale
                          ? "Nothing has come back from \(BackgroundTaskPhrase.of(tasks))"
                          : "Waiting for \(BackgroundTaskPhrase.of(tasks))")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(stale ? Theme.attentionText : .secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -224,11 +356,12 @@ struct DesignView: View {
                         note: tasks.map(\.label).joined(separator: "\n"))
             }
         } else {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 StateLight(tone: .running, size: 6)
                 Text("\(session.agent.title) is shaping the canvas…")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
     }
@@ -249,70 +382,49 @@ struct DesignView: View {
                         state: runner.state(sessionID))
     }
 
-    private func splitHandle(conversationWidth: CGFloat,
-                             availableWidth: CGFloat) -> some View {
-        Color.clear
-            .frame(width: DesignSplitLayout.handleWidth)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(coordinateSpace: .global)
-                    .onChanged { value in
-                        let start = dragStartConversationWidth ?? conversationWidth
-                        dragStartConversationWidth = start
-                        self.conversationWidth = DesignSplitLayout.conversationWidth(
-                            start + value.translation.width,
-                            availableWidth: availableWidth)
-                    }
-                    .onEnded { _ in dragStartConversationWidth = nil })
-            .onHover { inside in
-                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-            }
-            .appTooltip("Drag to resize")
-            .accessibilityElement()
-            .accessibilityLabel("Resize Design conversation")
-            .accessibilityValue("\(Int(conversationWidth)) points wide")
-            .accessibilityAdjustableAction { direction in
-                let change: CGFloat = switch direction {
-                case .increment: 32
-                case .decrement: -32
-                @unknown default: 0
-                }
-                self.conversationWidth = DesignSplitLayout.conversationWidth(
-                    conversationWidth + change,
-                    availableWidth: availableWidth)
-            }
-    }
+    // MARK: - Composer
 
     private func designComposer(_ session: ChatSession) -> some View {
         let blocked = !FileManager.default.fileExists(atPath: store.workingDirectory(for: session) ?? "")
             || !runner.isAvailable(session.agent)
-        let busy = runner.state(sessionID).isBusy
         return Composer(sessionID: sessionID,
                         agent: session.agent,
                         blocked: blocked,
                         isFocused: $composerFocused,
-                        placeholder: busy ? "Queue the next revision…" : "Describe what to design…",
-                        inset: 12,
+                        placeholder: composerPlaceholder(session),
+                        inset: 14,
+                        minimumLines: 3,
                         onOversizedPaste: attachPastedText,
                         onRecallUp: { runner.recallEarlier(sessionID, store: store) },
                         onRecallDown: { runner.recallLater(sessionID, store: store) },
                         above: {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                SessionRunSettingsControls(sessionID: sessionID)
-                            }
                             let queued = runner.queued(sessionID).count
                             if queued > 0 {
-                                Text(counted(queued, "revision") + " queued")
+                                Text(counted(queued, "prompt") + " queued")
                                     .font(.mono(9.5, .semibold))
                                     .foregroundStyle(.secondary)
                             }
                         },
                         accessory: {
-                            Image(systemName: "paintbrush.pointed.fill")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(Theme.accent)
-                                .frame(width: 22, height: 22)
+                            Button {
+                                let urls = FilePicker.chooseFiles(prompt: "Attach", message: "Choose references for this design.")
+                                runner.attach(Attachments.fromDrop(urls), to: sessionID)
+                                composerFocused = true
+                            } label: {
+                                Image(systemName: "paperclip")
+                                    .foregroundStyle(Theme.accent)
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(blocked)
+                            .accessibilityLabel("Attach a reference")
                         })
+    }
+
+    private func composerPlaceholder(_ session: ChatSession) -> String {
+        if runner.state(sessionID).isBusy { return "Queue a follow-up…" }
+        return session.messages.isEmpty ? "Describe what to design…" : "Refine this design…"
     }
 
     private func attachPastedText(_ text: String) {
@@ -321,133 +433,167 @@ struct DesignView: View {
         composerFocused = true
     }
 
+    // Questions from the agent, a held-open turn and a failed one all sit right above
+    // the composer, where the answer gets typed.
+    @ViewBuilder
+    private func turnNotices(_ session: ChatSession) -> some View {
+        let state = runner.state(sessionID)
+        let projectPath = store.workingDirectory(for: session) ?? ""
+        let question = runner.question(sessionID)
+        let waiting = state == .waiting && !waitNoticeDismissed
+            ? runner.waitingSince(sessionID) : nil
+        VStack(alignment: .leading, spacing: 10) {
+            if let request = question {
+                PermissionCard(request: request,
+                               workingDirectories: store.workingDirectories(for: session),
+                               projectPath: projectPath) { answer in
+                    runner.answer(request, with: answer,
+                                  sessionID: sessionID, store: store)
+                }
+                .id(request.id)
+            }
+
+            if let waitingSince = waiting {
+                WaitingNotice(since: waitingSince,
+                              tasks: runner.backgroundTasks(sessionID),
+                              agentTitle: session.agent.title,
+                              command: { session.shellCommand(for: $0) },
+                              onKeepWaiting: { waitNoticeDismissed = true },
+                              onEnd: { runner.endWait(sessionID) })
+            }
+
+            TurnEndActions(sessionID: sessionID, state: state)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, question != nil || waiting != nil || hasTurnEndAction(state) ? 10 : 0)
+        // A dismissed notice is dismissed for that wait only: the next one is a new turn
+        // parked on new tasks, and it has its own case to make.
+        .onChange(of: state) { _, state in
+            if state != .waiting { waitNoticeDismissed = false }
+        }
+    }
+
+    private func hasTurnEndAction(_ state: SessionState) -> Bool {
+        if case .failed = state { return true }
+        return runner.canContinueAfterStop(sessionID, store: store)
+    }
+
     // MARK: - Canvas
 
-    private func canvasPane(_ session: ChatSession, directory: URL,
-                            liveDirectory: URL) -> some View {
+    private func canvasColumn(_ session: ChatSession, directory: URL) -> some View {
         let implementation = store.implementationSessions(for: session.id).last
         let needsImplementationUpdate = implementation.map {
-            designNeedsUpdate(session, implementation: $0, liveDirectory: liveDirectory)
+            designNeedsUpdate(session, implementation: $0, directory: directory)
         } ?? false
+        let busy = runner.state(sessionID).isBusy
         return VStack(spacing: 0) {
             DesignCanvasBar(canvas: canvas) {
-                Text("CANVAS")
-                    .font(.mono(10, .semibold))
-                    .kerning(1)
-                    .foregroundStyle(.secondary)
                 if canvas.revision != nil {
-                    StatusDot()
                     Text(canvas.selectedScreen?.path ?? "index.html")
                         .font(.mono(10.5))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                         .appTooltip(canvas.screenURL(in: directory)?.path ?? directory.path)
                 }
             } tools: {
-                if !session.designRevisions.isEmpty {
-                    OptionMenu(value: displayedRevision?.title ?? "Live", matchWidth: false) {
-                        revisionMenu(session)
-                    }
-                    .fixedSize()
-                }
-
                 if canvas.revision != nil {
-                    if displayedRevision == nil {
-                        GlyphButton(icon: selectionEnabled ? "scope" : "cursorarrow", side: 28,
-                                    active: selectionEnabled, tint: Theme.accent) {
-                            selectionEnabled.toggle()
-                        }
-                        .appTooltip(selectionEnabled
-                            ? "Stop selecting canvas elements"
-                            : "Select an element to refine")
+                    GlyphButton(icon: selectionEnabled ? "scope" : "cursorarrow", side: 28,
+                                active: selectionEnabled, tint: Theme.accent) {
+                        selectionEnabled.toggle()
                     }
+                    .appTooltip(selectionEnabled
+                        ? "Stop selecting canvas elements"
+                        : "Select an element to refine")
+                    .accessibilityLabel("Select an element to refine")
 
-                    if displayedRevision != nil {
-                        GlyphButton(icon: "rectangle.split.2x1", side: 28,
-                                    active: comparingWithLive, tint: Theme.accent) {
-                            comparingWithLive.toggle()
-                        }
-                        .appTooltip("Compare this revision with the live canvas")
-
-                        GlyphButton(icon: "arrow.uturn.backward", side: 28, tint: Theme.accent) {
-                            confirmRestore(session)
-                        }
-                        .appTooltip("Use this revision as the next direction")
-                    } else {
-                        GlyphButton(icon: "bookmark.fill", side: 28, tint: Theme.accent) {
-                            preparingHandoff = true
-                            snapshotRequest = DesignSnapshotRequest(purpose: .revision)
-                        }
-                        .disabled(preparingHandoff || runner.state(sessionID).isBusy)
-                        .appTooltip("Save a Design version")
-
-                        if let implementation {
-                            if onOpenImplementation == nil {
-                                ActionButton(title: "Build", tone: .outlined,
-                                             height: 28, size: 11,
-                                             icon: "arrow.right") {
-                                    openImplementation(implementation)
-                                }
-                            }
-
-                            if needsImplementationUpdate {
-                                ActionButton(
-                                    title: preparingHandoff ? "Preparing…" : "Update build",
-                                    tone: .green, height: 28, size: 11,
-                                    icon: preparingHandoff ? "hourglass" : "arrow.triangle.2.circlepath") {
-                                        requestImplementationSnapshot()
-                                    }
-                                    .disabled(preparingHandoff || runner.state(sessionID).isBusy)
-                            } else {
-                                MonoChip(text: "BUILD UP TO DATE", size: 8.5,
-                                         tint: Theme.accent)
-                            }
-                        } else {
-                            ActionButton(title: preparingHandoff ? "Preparing…" : "Implement",
-                                         tone: .green, height: 28, size: 11,
-                                         icon: preparingHandoff ? "hourglass" : "hammer.fill") {
-                                showImplementationDialog()
-                            }
-                            .disabled(preparingHandoff || runner.state(sessionID).isBusy)
-                        }
-                    }
-
-                    ActionButton(title: "Full Screen",
-                                 tone: designWindow.isOpen ? .sunken : .outlined,
-                                 height: 28, size: 11, icon: "macwindow") {
+                    GlyphButton(icon: "arrow.up.left.and.arrow.down.right", side: 28,
+                                active: designWindow.isOpen, tint: Theme.accent) {
                         openDesignWindow(session, directory: directory)
                     }
                     .appTooltip(designWindow.isOpen
                         ? "Bring design window to front"
                         : "Open design in a separate window")
+                    .accessibilityLabel("Full screen")
+
+                    if let implementation {
+                        if onOpenImplementation == nil {
+                            ActionButton(title: "Build", tone: .outlined,
+                                         height: 28, size: 11,
+                                         icon: "arrow.right") {
+                                openImplementation(implementation)
+                            }
+                        }
+
+                        if needsImplementationUpdate {
+                            ActionButton(
+                                title: preparingHandoff ? "Preparing…" : "Update build",
+                                tone: .green, height: 28, size: 11,
+                                icon: preparingHandoff ? "hourglass" : "arrow.triangle.2.circlepath") {
+                                    implement()
+                                }
+                                .disabled(preparingHandoff || busy)
+                        } else {
+                            MonoChip(text: "BUILD UP TO DATE", size: 8.5,
+                                     tint: Theme.accent)
+                        }
+                    } else {
+                        ActionButton(title: preparingHandoff ? "Preparing…" : "Implement",
+                                     tone: .green, height: 28, size: 11,
+                                     icon: preparingHandoff ? "hourglass" : "hammer.fill") {
+                            showImplementationDialog()
+                        }
+                        .disabled(preparingHandoff || busy)
+                    }
                 }
             }
 
-            if let revision = canvas.revision, let url = canvas.screenURL(in: directory) {
-                if comparingWithLive, displayedRevision != nil,
-                   let liveRevision = DesignArtifactRevision.read(liveDirectory),
-                   let liveURL = canvas.screenURL(in: liveDirectory) {
-                    HStack(spacing: 1) {
-                        labelledPreview("LIVE", url: liveURL, directory: liveDirectory,
-                                        revision: liveRevision, selectionEnabled: false)
-                        labelledPreview(displayedRevision?.title.uppercased() ?? "REVISION",
-                                        url: url, directory: directory,
-                                        revision: revision, selectionEnabled: false)
-                    }
-                } else {
-                    // The agent cannot see the canvas it draws into, so the canvas tells
-                    // it how much room there is. Only the single live preview reports:
-                    // the side-by-side comparison is a way of looking at the design, not
-                    // a width it has to work at.
-                    canvasPreview(url, directory: directory, revision: revision,
-                                  selectionEnabled: displayedRevision == nil && selectionEnabled,
-                                  onViewport: { runner.recordCanvasWidth($0, for: sessionID) })
+            GeometryReader { geometry in
+                let toolbarHeight = canvas.revision != nil && canvas.screenURL(in: directory) != nil
+                    ? DesignWebView.toolbarHeight : 0
+                let workspace = CGSize(width: geometry.size.width,
+                                       height: max(0, geometry.size.height - toolbarHeight))
+                // A sibling rather than an overlay of the canvas: an overlay is rebuilt each
+                // time the canvas switches between its placeholders and the page, which would
+                // throw away the composer, its focus and the transcript's scroll position.
+                ZStack(alignment: .bottom) {
+                    canvasContent(session, directory: directory, busy: busy)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    floatingConversation(session, size: workspace)
+                        .padding(DesignConversationLayout.inset(in: workspace))
+                        .padding(.bottom, toolbarHeight)
                 }
-            } else {
-                PaneMessage(icon: "rectangle.on.rectangle.angled",
-                            title: "Your design will appear here",
-                            detail: "Describe the first direction in the Design conversation.")
-                    .background(Theme.sunken)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func canvasContent(_ session: ChatSession, directory: URL, busy: Bool) -> some View {
+        if let revision = canvas.revision, let url = canvas.screenURL(in: directory) {
+            // The agent cannot see the canvas it draws into, so the canvas tells it how
+            // much room there is.
+            DesignWebView(url: url,
+                          readAccessURL: directory,
+                          screen: canvas.selectedScreen,
+                          revision: revision,
+                          reloadGeneration: canvas.reloadGeneration,
+                          selectionEnabled: selectionEnabled,
+                          snapshotRequest: snapshotRequest,
+                          onSelection: selectElement,
+                          onSnapshot: receiveSnapshot,
+                          onViewport: { runner.recordCanvasWidth($0, for: sessionID) })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.white)
+        } else if busy {
+            PaneMessage(icon: "paintbrush.pointed",
+                        title: "Building the design",
+                        detail: "It appears here as soon as \(session.agent.title) writes it.")
+                .background(Theme.sunken)
+        } else {
+            PaneMessage(icon: "rectangle.on.rectangle.angled",
+                        title: "Your design appears here",
+                        detail: "Describe what to design in the prompt below.")
+                .background(Theme.sunken)
         }
     }
 
@@ -456,69 +602,8 @@ struct DesignView: View {
             title: session.title,
             content: DesignWindowView(canvas: canvas,
                                       directory: directory,
-                                      label: displayedRevision?.title ?? "Canvas",
+                                      label: "Canvas",
                                       onClose: { designWindow.close() }))
-    }
-
-    private var displayedRevision: DesignRevision? {
-        guard let displayedRevisionID,
-              let session = store.session(sessionID) else { return nil }
-        return session.designRevisions.first { $0.id == displayedRevisionID }
-    }
-
-    private func revisionMenu(_ session: ChatSession) -> [MenuEntry] {
-        var entries: [MenuEntry] = [
-            .item("Live canvas", icon: "sparkles",
-                  checked: displayedRevisionID == nil) {
-                displayedRevisionID = nil
-                comparingWithLive = false
-            },
-            .separator,
-        ]
-        entries += session.designRevisions.reversed().map { revision in
-            .item(revision.title, icon: "clock.arrow.circlepath",
-                  checked: displayedRevisionID == revision.id,
-                  subtitle: revision.createdAt.formatted(date: .abbreviated, time: .shortened)) {
-                displayedRevisionID = revision.id
-                comparingWithLive = false
-            }
-        }
-        return entries
-    }
-
-    private func labelledPreview(_ label: String, url: URL, directory: URL,
-                                 revision: DesignArtifactRevision,
-                                 selectionEnabled: Bool) -> some View {
-        VStack(spacing: 0) {
-            Text(label)
-                .font(.mono(9.5, .semibold))
-                .kerning(0.8)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .background(Theme.sunken)
-            canvasPreview(url, directory: directory, revision: revision,
-                          selectionEnabled: selectionEnabled)
-        }
-    }
-
-    private func canvasPreview(_ url: URL, directory: URL,
-                               revision: DesignArtifactRevision,
-                               selectionEnabled: Bool,
-                               onViewport: ((Double) -> Void)? = nil) -> some View {
-        DesignWebView(url: url,
-                      readAccessURL: directory,
-                      screen: canvas.selectedScreen,
-                      revision: revision,
-                      reloadGeneration: canvas.reloadGeneration,
-                      selectionEnabled: selectionEnabled,
-                      snapshotRequest: snapshotRequest,
-                      onSelection: selectElement,
-                      onSnapshot: receiveSnapshot,
-                      onViewport: onViewport)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.white)
     }
 
     private func selectElement(_ selection: DesignElementSelection) {
@@ -531,28 +616,6 @@ struct DesignView: View {
         snapshotRequest = DesignSnapshotRequest(purpose: .selection,
                                                 rect: selection.rect.insetBy(dx: -8, dy: -8))
         composerFocused = true
-    }
-
-    private func showImplementationDialog() {
-        let draft = DesignImplementationDraft()
-        dialogs.show(Dialog(
-            title: "Implement this Design?",
-            message: "Add guidance if the canvas shows multiple options, or leave this blank to implement the Design as shown.",
-            content: AnyView(DesignImplementationContextEditor(draft: draft)),
-            actions: [
-                .init(label: "Implement", kind: .primary) {
-                    requestImplementationSnapshot(additionalContext: draft.text)
-                },
-                .init(label: "Cancel", kind: .cancel),
-            ],
-            width: 460))
-    }
-
-    private func requestImplementationSnapshot(additionalContext: String? = nil) {
-        guard canvas.revision != nil else { return }
-        preparingHandoff = true
-        snapshotRequest = DesignSnapshotRequest(purpose: .handoff,
-                                                additionalContext: additionalContext)
     }
 
     private func receiveSnapshot(_ image: NSImage?, request: DesignSnapshotRequest) {
@@ -569,27 +632,46 @@ struct DesignView: View {
                 await prepareHandoff(screenshot: image.flatMap(DesignArtifacts.pngData),
                                      additionalContext: request.additionalContext)
             }
-        case .revision:
-            Task { await saveRevision(screenshot: image.flatMap(DesignArtifacts.pngData)) }
         }
     }
 
-    private func saveRevision(screenshot: Data?) async {
-        guard let session = store.session(sessionID) else {
-            preparingHandoff = false
+    // MARK: - Implementation
+
+    private func showImplementationDialog() {
+        let draft = DesignImplementationDraft()
+        dialogs.show(Dialog(
+            title: "Implement this Design?",
+            message: "Add guidance if the canvas shows multiple options, or leave this blank to implement the Design as shown.",
+            content: AnyView(DesignImplementationContextEditor(draft: draft)),
+            actions: [
+                .init(label: "Implement", kind: .primary) {
+                    implement(additionalContext: draft.text)
+                },
+                .init(label: "Cancel", kind: .cancel),
+            ],
+            width: 460))
+    }
+
+    // Hands over the canvas as it is now. If an earlier handoff already saved these
+    // exact files, that copy is approved again rather than saved a second time.
+    private func implement(additionalContext: String? = nil) {
+        guard canvas.revision != nil, let session = store.session(sessionID) else { return }
+        preparingHandoff = true
+        let directory = store.designDirectory(for: session)
+        if let saved = session.designRevisions
+            .sorted(by: { $0.number > $1.number })
+            .first(where: { DesignArtifacts.matchesLive($0, designDirectory: directory) }) {
+            switch store.approveDesignRevision(saved.id, for: sessionID) {
+            case .success(let approved):
+                handOver(approved, additionalContext: additionalContext)
+            case .failure(let failure):
+                preparingHandoff = false
+                dialogs.show(.notice("Could not prepare the Design", message: failure.message))
+            }
             return
         }
-        let source = await DesignHandoffLifecycle.sourceRevisions(for: session, store: store)
-        switch store.saveDesignRevision(
-            sessionID, screenshot: screenshot, sourceRevisions: source) {
-        case .success(let revision):
-            store.append(ChatMessage(role: .system,
-                                     text: "Saved \(revision.title)."),
-                         to: sessionID)
-        case .failure(let failure):
-            dialogs.show(.notice("Could not save the Design revision", message: failure.message))
-        }
-        preparingHandoff = false
+        snapshotRequest = DesignSnapshotRequest(purpose: .handoff,
+                                                additionalContext: additionalContext)
     }
 
     private func prepareHandoff(screenshot: Data?, additionalContext: String?) async {
@@ -599,47 +681,47 @@ struct DesignView: View {
         }
         let revisions = await DesignHandoffLifecycle.sourceRevisions(for: session, store: store)
         switch store.approveDesign(sessionID, screenshot: screenshot,
-                                   sourceRevisions: revisions) {
+                                   sourceRevisions: revisions, promptID: latestPromptID) {
         case .failure(let failure):
             preparingHandoff = false
             dialogs.show(.notice("Could not prepare the Design", message: failure.message))
         case .success(let revision):
-            preparingHandoff = false
-            if let implementation = store.implementationSessions(for: sessionID).last {
-                switch DesignHandoffLifecycle.sendLatestDesign(
-                    to: implementation.id, store: store, runner: runner) {
-                case .success:
-                    store.append(ChatMessage(
-                        role: .system,
-                        text: "Sent \(revision.title) to Build."),
-                        to: sessionID)
-                case .failure(let failure):
-                    dialogs.show(.notice(failure.title, message: failure.message))
-                }
-            } else {
-                switch DesignHandoffLifecycle.startImplementation(
-                    sessionID, revision: revision, additionalContext: additionalContext,
-                    store: store, runner: runner) {
-                case .success:
-                    onOpenImplementation?()
-                case .failure(let failure):
-                    dialogs.show(.notice(failure.title, message: failure.message))
-                }
+            handOver(revision, additionalContext: additionalContext)
+        }
+    }
+
+    private func handOver(_ revision: DesignRevision, additionalContext: String?) {
+        preparingHandoff = false
+        if let implementation = store.implementationSessions(for: sessionID).last {
+            switch DesignHandoffLifecycle.sendLatestDesign(
+                to: implementation.id, store: store, runner: runner) {
+            case .success:
+                store.append(ChatMessage(role: .system, text: "Sent the design to Build."),
+                             to: sessionID)
+            case .failure(let failure):
+                dialogs.show(.notice(failure.title, message: failure.message))
+            }
+        } else {
+            switch DesignHandoffLifecycle.startImplementation(
+                sessionID, revision: revision, additionalContext: additionalContext,
+                store: store, runner: runner) {
+            case .success:
+                onOpenImplementation?()
+            case .failure(let failure):
+                dialogs.show(.notice(failure.title, message: failure.message))
             }
         }
     }
 
     private func designNeedsUpdate(_ design: ChatSession, implementation: ChatSession,
-                                   liveDirectory: URL) -> Bool {
+                                   directory: URL) -> Bool {
         if store.designHasUpdated(for: implementation) { return true }
         guard let revisionID = implementation.handedOffDesignRevisionID,
               let revision = design.designRevisions.first(where: { $0.id == revisionID }) else {
             return true
         }
-        let handedOff = DesignArtifacts.materialsDirectory(
-            revision, designDirectory: store.designDirectory(for: design))
-        return DesignArtifactRevision.read(liveDirectory)
-            != DesignArtifactRevision.read(handedOff)
+        let handedOff = DesignArtifacts.materialsDirectory(revision, designDirectory: directory)
+        return DesignArtifactRevision.read(directory) != DesignArtifactRevision.read(handedOff)
     }
 
     private func openImplementation(_ implementation: ChatSession) {
@@ -649,23 +731,9 @@ struct DesignView: View {
             store.selectSession(implementation.id)
         }
     }
-
-    private func confirmRestore(_ session: ChatSession) {
-        guard let revision = displayedRevision else { return }
-        dialogs.show(.confirm(
-            "Use \(revision.title) as the next direction?",
-            message: "The live canvas is replaced with this saved revision. Its revision history is kept.",
-            action: "Use \(revision.title)", kind: .primary) {
-                switch store.restoreDesignRevision(revision.id, for: session.id) {
-                case .success:
-                    displayedRevisionID = nil
-                    comparingWithLive = false
-                case .failure(let failure):
-                    dialogs.show(.notice("Could not restore the Design", message: failure.message))
-                }
-            })
-    }
 }
+
+
 
 @MainActor
 @Observable
@@ -873,7 +941,7 @@ struct DesignCanvasBar<Leading: View, Tools: View>: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 42)
+        .frame(height: DesignSplitLayout.barHeight)
         .background(Theme.card)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.hairline).frame(height: 1)
@@ -882,20 +950,8 @@ struct DesignCanvasBar<Leading: View, Tools: View>: View {
 }
 
 enum DesignSplitLayout {
-    static let defaultConversationWidth: CGFloat = 340
-    static let minimumConversationWidth: CGFloat = 280
     static let minimumCanvasWidth: CGFloat = 320
-    static let dividerWidth: CGFloat = 1
-    static let handleWidth: CGFloat = 9
-
-    static func conversationWidth(_ proposedWidth: CGFloat,
-                                  availableWidth: CGFloat) -> CGFloat {
-        let paneWidth = max(0, availableWidth - dividerWidth)
-        let halfWidth = paneWidth / 2
-        let minimum = min(minimumConversationWidth, halfWidth)
-        let maximum = max(minimum, paneWidth - min(minimumCanvasWidth, halfWidth))
-        return min(max(proposedWidth, minimum), maximum)
-    }
+    static let barHeight: CGFloat = 42
 }
 
 struct DesignElementSelection: Equatable {
@@ -906,7 +962,7 @@ struct DesignElementSelection: Equatable {
 }
 
 struct DesignSnapshotRequest: Equatable {
-    enum Purpose: Equatable { case handoff, revision, selection }
+    enum Purpose: Equatable { case handoff, selection }
 
     let id = UUID()
     let purpose: Purpose

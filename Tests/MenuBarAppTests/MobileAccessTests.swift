@@ -154,6 +154,17 @@ struct MobileAccessTests {
         #expect(try decoder.append(second) == [.text("hi")])
     }
 
+    @Test func readsManyFramesAndRetainsAPartialFrame() throws {
+        var decoder = WebSocketFrameDecoder()
+        let frame = Data([0x81, 0x82, 1, 2, 3, 4, 0x68 ^ 1, 0x69 ^ 2])
+        var batch = Data()
+        for _ in 0..<1_000 { batch.append(frame) }
+        batch.append(frame.prefix(3))
+
+        #expect(try decoder.append(batch) == Array(repeating: .text("hi"), count: 1_000))
+        #expect(try decoder.append(frame.dropFirst(3)) == [.text("hi")])
+    }
+
     @Test func decodesTheVersionedMobileCommands() throws {
         let auth = try JSONDecoder().decode(
             RemoteCommand.self,

@@ -20,8 +20,11 @@ struct TaskDetailView: View {
     @State private var tab: Tab = .task
     @State private var prompt = ""
     @State private var promptLoaded = false
+    @State private var promptFocused = false
     @State private var terminalFocused = false
     @State private var askingTask: Project?
+    @State private var runFilter: TaskRunHistory.Filter = .all
+    @State private var paneWidth: CGFloat = 1_000
 
     private var terminalScope: TerminalScope { .project(projectID) }
 
@@ -128,6 +131,13 @@ struct TaskDetailView: View {
                 }
             }
 
+            if let schedule = spec(task).schedule, schedule.isActive,
+               let next = schedule.nextRunAt {
+                StatusRule()
+                StatusValue(text: "Next run \(RelativeTime.stamp(next))", tint: Theme.accent)
+                    .fixedSize()
+            }
+
             Spacer(minLength: 12)
 
             if let latest {
@@ -172,96 +182,208 @@ struct TaskDetailView: View {
 
     // MARK: - Task tab
 
+    // The prompt is the page; the schedule and the inputs are settings beside it. Below
+    // about 900 points the settings drop under the prompt rather than squeezing it, and
+    // stay above the runs, since they shape the next run while the runs are history. One
+    // layout that only moves its parts keeps the editor itself in place, so the cursor
+    // survives a window being resized across the line.
+    private static let stackBelow: CGFloat = 900
+
     private func details(_ task: Project) -> some View {
         let runs = store.standaloneSessions(for: task.id)
         let inputs = TaskTemplate.inputs(in: spec(task))
         return ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                promptCard(task)
-                TaskScheduleCard(task: task, schedule: spec(task).schedule) { schedule in
-                    changeSpec(task) { $0.schedule = schedule }
-                }
-                if !inputs.isEmpty {
+            TaskDetailLayout(wide: paneWidth >= Self.stackBelow) {
+                promptCard(task, inputs: inputs)
+
+                VStack(alignment: .leading, spacing: 22) {
+                    TaskScheduleCard(task: task, schedule: spec(task).schedule) { schedule in
+                        changeSpec(task) { $0.schedule = schedule }
+                    }
                     TaskInputsCard(inputs: inputs) { input in
                         changeSpec(task) { spec in
                             spec.inputs = TaskTemplate.saving(input, in: spec)
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 runList(task, runs: runs, inputs: inputs)
             }
             .padding(24)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { paneWidth = $0 }
     }
 
-    private func promptCard(_ task: Project) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
-            SectionRule(title: "PROMPT") { EmptyView() }
+    private func promptCard(_ task: Project, inputs: [TaskInput]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Prompt")
+                .font(.serif(15, .semibold))
+                .padding(.horizontal, 18)
+                .padding(.top, 16)
 
-            AppTextEditor(text: $prompt,
-                          placeholder: "What should the agent do on every run?",
-                          minHeight: 110)
+            TaskPromptEditor(text: $prompt,
+                             placeholder: "What should the agent do on every run?",
+                             minHeight: 96,
+                             onFocusChange: { promptFocused = $0 })
+                .padding(.horizontal, 18)
+                .padding(.top, 10)
 
-            Text("Anything in double braces is a hole the run fills in: write {{ticket}} and every run asks for a ticket before it starts.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // How to make a hole only matters while writing, but the holes a run will ask
+            // for stay in view, since they change what pressing Run does.
+            if promptFocused || !inputs.isEmpty {
+                holeHint(inputs)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+                    .transition(.opacity)
+            }
 
             Divider().overlay(Theme.hairline)
+                .padding(.top, 16)
 
             runBar(task)
+                .padding(.leading, 18)
+                .padding(.trailing, 14)
+                .padding(.vertical, 12)
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface(cornerRadius: 12)
+        .animation(Motion.reveal, value: promptFocused)
     }
 
-    private func runList(_ task: Project, runs: [ChatSession], inputs: [TaskInput]) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
-            SectionRule(title: "RUNS") { EmptyView() }
+    // What each run will ask for, read off the prompt as it is typed. With nothing to
+    // ask, it says how to make a hole instead.
+    private func holeHint(_ inputs: [TaskInput]) -> some View {
+        let text: Text
+        if inputs.isEmpty {
+            text = Text("Type \(holeName("{{ticket}}")) anywhere and each run asks for a ticket before it starts.")
+        } else {
+            var names = holeName(inputs[0].name)
+            for input in inputs.dropFirst() {
+                names = Text("\(names), \(holeName(input.name))")
+            }
+            text = Text("Each run asks for \(names) before it starts.")
+        }
+        return text
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
 
-            if runs.isEmpty {
-                emptyRuns(task)
-            } else {
-                LazyVStack(spacing: 9) {
-                    ForEach(runs) { session in
-                        SessionRow(session: session,
-                                   tone: SessionTone(session.id, store: store, runner: runner),
-                                   branch: nil,
-                                   activity: SessionActivity.line(for: session, store: store,
-                                                                  runner: runner),
-                                   detail: .location(runDetail(session, task: task,
-                                                               inputs: inputs)),
-                                   onOpen: { store.selectSession(session.id) },
-                                   menu: { runMenu(session, task: task) })
+    private func holeName(_ name: String) -> Text {
+        Text(verbatim: name).font(.mono(11.5)).foregroundStyle(Theme.accent)
+    }
+
+    // MARK: - Runs
+
+    private func runList(_ task: Project, runs: [ChatSession], inputs: [TaskInput]) -> some View {
+        let shown = TaskRunHistory.filtered(runs, by: runFilter) { failure(of: $0) != nil }
+        let days = TaskRunHistory.days(of: shown)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text("Runs")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("\(runs.count)")
+                    .font(.mono(11))
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 12)
+                if !runs.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(TaskRunHistory.Filter.allCases, id: \.self) { filter in
+                            ChoicePill(title: filter.title, selected: runFilter == filter) {
+                                runFilter = filter
+                            }
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Filter runs")
+                }
+            }
+
+            Group {
+                if shown.isEmpty {
+                    emptyRuns(hasRuns: !runs.isEmpty)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(days) { day in
+                            dayHeader(day.title, first: day.id == days.first?.id)
+                            ForEach(Array(day.runs.enumerated()), id: \.element.id) { index, session in
+                                if index > 0 {
+                                    Divider().overlay(Theme.hairline)
+                                }
+                                runRow(session, task: task, inputs: inputs)
+                            }
+                        }
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .cardSurface(cornerRadius: 12)
         }
     }
 
-    // Every run of a task sits in the same folder, so saying where it is says nothing.
-    // What it was given says what it was, and only falls back to the folder for a run
-    // from before the prompt asked for anything.
-    private func runDetail(_ session: ChatSession, task: Project,
-                           inputs: [TaskInput]) -> String {
-        let summary = TaskTemplate.summary(of: session.taskValues ?? [:], inputs: inputs)
-        return summary.isEmpty ? task.collapsedPath : summary
+    private func dayHeader(_ title: String, first: Bool) -> some View {
+        VStack(spacing: 0) {
+            if !first { Divider().overlay(Theme.hairline) }
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 16)
+                .padding(.top, 9)
+                .padding(.bottom, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.sunken)
+                .accessibilityAddTraits(.isHeader)
+        }
     }
 
-    private func emptyRuns(_ task: Project) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Not run yet")
+    private func runRow(_ session: ChatSession, task: Project, inputs: [TaskInput]) -> some View {
+        let tone = SessionTone(session.id, store: store, runner: runner)
+        let live = tone == .running || tone == .waiting
+        return TaskRunRow(
+            session: session,
+            tone: tone,
+            failure: failure(of: session).map { "Stopped: \($0)" },
+            activity: live ? SessionActivity.line(for: session, store: store, runner: runner) : "",
+            given: TaskTemplate.summary(of: session.taskValues ?? [:], inputs: inputs),
+            onOpen: { store.selectSession(session.id) },
+            menu: { runMenu(session, task: task) })
+    }
+
+    // Why a run stopped, read from how its turn ended. Only the runner knows this, so a
+    // run that failed before the app was last opened reads as finished.
+    private func failure(of session: ChatSession) -> String? {
+        let live = LiveConversation.id(of: session.id, store: store, runner: runner)
+        if case .failed(let message) = runner.state(live) {
+            let line = message.split(whereSeparator: \.isNewline).first.map(String.init)
+            return line?.trimmed.nilIfBlank ?? "the run ended with an error"
+        }
+        return nil
+    }
+
+    private func emptyRuns(hasRuns: Bool) -> some View {
+        let (title, detail): (String, String) = switch (hasRuns, runFilter) {
+        case (false, _), (true, .all):
+            ("Not run yet",
+             "Run task starts a fresh session in this folder and sends the prompt for you.")
+        case (true, .scheduled):
+            ("No scheduled runs", "Set a schedule and the runs it starts show up here.")
+        case (true, .failed):
+            ("No failed runs", "Every run so far finished.")
+        }
+        return VStack(spacing: 4) {
+            Text(title)
                 .font(.system(size: 14, weight: .semibold))
-            Text("Running the task starts a session in its folder and sends the prompt for you.")
+            Text(detail)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 11).fill(Theme.sunken))
-        .overlay(RoundedRectangle(cornerRadius: 11)
-            .stroke(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .padding(.horizontal, 18)
+        .padding(.vertical, 26)
+        .frame(maxWidth: .infinity)
     }
 
     private func runMenu(_ session: ChatSession, task: Project) -> [MenuEntry] {
@@ -296,6 +418,13 @@ struct TaskDetailView: View {
             }
             optionsMenu(choices)
             Spacer(minLength: 12)
+            if runBusy(task) {
+                Text("Waiting for the current run to finish")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
             ActionButton(title: "Run task", tone: .green, icon: "play.fill") {
                 run(task)
             }
@@ -497,8 +626,9 @@ struct TaskDetailView: View {
         return HStack(spacing: 4) {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 9, weight: .semibold))
-            Text("Options")
+            Text(optionsLabel(choices))
                 .font(.system(size: 11, weight: overridden ? .semibold : .regular))
+                .lineLimit(1)
             Image(systemName: "chevron.down")
                 .font(.system(size: 7, weight: .semibold))
         }
@@ -512,6 +642,16 @@ struct TaskDetailView: View {
         .appTooltip(overridden
             ? "The model, effort, and access choices each run starts with. Some are overridden for this task."
             : "The model, effort, and access choices each run starts with.")
+    }
+
+    // The current choices in words: "Default model, high effort". A warning choice
+    // already has its own control in the row, so it is not said twice.
+    private func optionsLabel(_ choices: [RunChoice]) -> String {
+        choices.enumerated().compactMap { index, choice -> String? in
+            if index >= 2, choice.warning || !choice.overridden { return nil }
+            return index == 0 ? choice.label : choice.label.lowercased()
+        }
+        .joined(separator: ", ")
     }
 
     // The rows of one choice: the default first, naming what it resolves to, then each
@@ -574,6 +714,7 @@ struct TaskDetailView: View {
         // The prompt on screen is the one the user expects to run, saved or not yet.
         savePrompt(task)
         guard let current = store.project(task.id) else { return }
+        runFilter = .all
         if TaskRun.needsInput(current) {
             askingTask = current
         } else {
@@ -612,6 +753,55 @@ struct TaskDetailView: View {
                                        dialogs: dialogs)
             }
             .fixedSize()
+        }
+    }
+}
+
+// Lays out the prompt, the settings and the runs, in that order. Wide, the settings sit in
+// a column on the right beside the prompt and the runs. Narrow, all three stack, with the
+// settings between the prompt and the runs.
+private struct TaskDetailLayout: Layout {
+    let wide: Bool
+    var sideWidth: CGFloat = 312
+    var spacing: CGFloat = 22
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let frames = self.frames(width: proposal.width ?? 800, subviews: subviews)
+        let size = frames.reduce(CGRect.zero) { $0.union($1) }
+        return CGSize(width: proposal.width ?? size.width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (subview, frame) in zip(subviews, frames(width: bounds.width, subviews: subviews)) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                          proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
+        guard subviews.count == 3 else { return [] }
+        let prompt = subviews[0], side = subviews[1], runs = subviews[2]
+        func height(of view: LayoutSubview, at width: CGFloat) -> CGFloat {
+            view.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        }
+
+        if wide {
+            let mainWidth = max(width - sideWidth - spacing, 0)
+            let promptHeight = height(of: prompt, at: mainWidth)
+            return [
+                CGRect(x: 0, y: 0, width: mainWidth, height: promptHeight),
+                CGRect(x: mainWidth + spacing, y: 0, width: sideWidth,
+                       height: height(of: side, at: sideWidth)),
+                CGRect(x: 0, y: promptHeight + spacing, width: mainWidth,
+                       height: height(of: runs, at: mainWidth)),
+            ]
+        }
+
+        var y: CGFloat = 0
+        return [prompt, side, runs].map { view in
+            let frame = CGRect(x: 0, y: y, width: width, height: height(of: view, at: width))
+            y = frame.maxY + spacing
+            return frame
         }
     }
 }

@@ -668,15 +668,15 @@ struct SelectableText: View {
     // Several blocks drawn as one text view. Each block's type and the gap above it
     // travel in the string, so the size and weight here are only what a run that carries
     // none of its own falls back to.
-    init(prose: AttributedString) {
+    init(prose: AttributedString, lineSpacing: CGFloat = 0, width: TextWidth = .fills) {
         self.init(attributed: prose,
                   size: 13.5,
                   weight: .regular,
                   design: .default,
                   secondary: false,
-                  lineSpacing: 0,
+                  lineSpacing: lineSpacing,
                   alignment: .leading,
-                  width: .fills,
+                  width: width,
                   italic: false,
                   role: .block)
     }
@@ -1087,8 +1087,11 @@ private struct LinkAwareText: NSViewRepresentable {
         view.textContainer?.lineFragmentPadding = 0
         view.textContainer?.widthTracksTextView = width != .fixed
         view.textContainer?.heightTracksTextView = false
-        view.isHorizontallyResizable = width == .fixed
-        view.isVerticallyResizable = true
+        // SwiftUI owns the frame. A text view that sized itself would grow or shrink
+        // every time it is measured at a width it is never placed at, and then its frame
+        // no longer matches where SwiftUI thinks it is, so clicks miss it.
+        view.isHorizontallyResizable = false
+        view.isVerticallyResizable = false
         view.reflows = width != .fixed
         if width == .fixed {
             view.textContainer?.containerSize = CGSize(width: CGFloat.greatestFiniteMagnitude,

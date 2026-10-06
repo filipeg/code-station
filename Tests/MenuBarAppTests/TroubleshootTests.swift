@@ -68,6 +68,34 @@ struct TroubleshootTests {
         #expect(request.customInstructions.contains("No skills were picked for this diagnosis"))
     }
 
+    @Test func incidentTimeIsSentVerbatimWithoutAnInferredTimezone() {
+        let request = TroubleshootRequest(
+            problem: "Latency doubled", incidentTime: "Yesterday around 14:00",
+            environment: Self.dev, projects: ["api"], mcpServersEnabled: false,
+            agent: .codex)
+        #expect(request.userInput == "Latency doubled\n\nIncident time window (as supplied): Yesterday around 14:00")
+        let blank = TroubleshootRequest(
+            problem: "Latency doubled", incidentTime: "  \n ",
+            environment: Self.dev, projects: ["api"], mcpServersEnabled: false,
+            agent: .codex)
+        #expect(blank.userInput == "Latency doubled")
+        let evidenceOnly = TroubleshootRequest(
+            problem: "", incidentTime: "last 30 minutes",
+            environment: Self.dev, projects: ["api"], mcpServersEnabled: false,
+            agent: .codex)
+        #expect(evidenceOnly.userInput == "Troubleshoot the problem shown in the attached files.\n\nIncident time window (as supplied): last 30 minutes")
+    }
+
+    @Test func eachServerShowsItsOwnConfigurationState() {
+        let state = TroubleshootMCPState.unavailable(TroubleshootMCPConfiguration(
+            requiredNames: ["ready", "missing", "disabled"],
+            registeredNames: ["ready", "disabled"], disabledNames: ["disabled"]))
+        #expect(state.configurationLabel(for: "ready") == "Configured")
+        #expect(state.configurationLabel(for: "missing") == "Not configured")
+        #expect(state.configurationLabel(for: "disabled") == "Disabled")
+        #expect(TroubleshootMCPState.checking.configurationLabel(for: "ready") == "Checking")
+    }
+
     @Test func chosenSkillsSurviveTheAppBeingClosed() {
         let suite = "troubleshoot-skills-\(UUID().uuidString)"
         let store = UserDefaults(suiteName: suite)!
@@ -417,11 +445,13 @@ struct TroubleshootBriefTests {
 
         runner.editBrief(sessionID) {
             $0.problem = "Payments return 503 after deployment"
+            $0.incidentTime = "14:00 UTC"
             $0.attachments = [evidence]
             $0.mcpServersEnabled = false
         }
 
         #expect(runner.brief(sessionID).problem == "Payments return 503 after deployment")
+        #expect(runner.brief(sessionID).incidentTime == "14:00 UTC")
         #expect(runner.brief(sessionID).attachments == [evidence])
         #expect(runner.brief(sessionID).mcpServersEnabled == false)
     }
@@ -444,6 +474,7 @@ struct TroubleshootBriefTests {
         let brief = runner.brief(UUID())
 
         #expect(brief.problem.isEmpty)
+        #expect(brief.incidentTime.isEmpty)
         #expect(brief.attachments.isEmpty)
         #expect(brief.mcpServersEnabled)
     }
@@ -453,9 +484,13 @@ struct TroubleshootBriefTests {
         let runner = SessionRunner()
         let sessionID = UUID()
 
-        runner.editBrief(sessionID) { $0.problem = "queue is stuck" }
+        runner.editBrief(sessionID) {
+            $0.problem = "queue is stuck"
+            $0.incidentTime = "last hour"
+        }
         runner.clearBrief(sessionID)
 
         #expect(runner.brief(sessionID).problem.isEmpty)
+        #expect(runner.brief(sessionID).incidentTime.isEmpty)
     }
 }

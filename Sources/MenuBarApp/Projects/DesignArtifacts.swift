@@ -50,6 +50,9 @@ struct DesignRevision: Codable, Equatable, Identifiable, Sendable {
     let createdAt: Date
     let sourceRevisions: [String: String]
     let screens: [DesignScreen]
+    // The prompt whose turn produced this version, so the version can sit next to the
+    // words that made it. Nil for versions saved by hand before every turn kept one.
+    var promptID: UUID? = nil
 
     var title: String { "Design v\(number)" }
 }
@@ -106,6 +109,29 @@ enum DesignArtifacts {
             case .couldNotSave(let detail):
                 "The Design revision could not be saved: \(detail)"
             }
+        }
+    }
+
+    // Whether the live canvas holds exactly the files this version saved. A saved
+    // version may carry a handoff note the live canvas never had, so that one file
+    // only counts when the live canvas has it too.
+    static func matchesLive(_ revision: DesignRevision, designDirectory: URL) -> Bool {
+        guard let live = DesignArtifactRevision.read(designDirectory),
+              let saved = DesignArtifactRevision.read(
+                materialsDirectory(revision, designDirectory: designDirectory))
+        else { return false }
+        let liveHasHandoff = live.files.contains { $0.path == "handoff.md" }
+        let savedFiles = saved.files.filter { liveHasHandoff || $0.path != "handoff.md" }
+        guard savedFiles.map(\.path) == live.files.map(\.path) else { return false }
+        let materials = materialsDirectory(revision, designDirectory: designDirectory)
+        // A copy normally keeps its file dates, which settles most files without reading
+        // them. Where a date differs, the bytes decide.
+        return zip(savedFiles, live.files).allSatisfy { savedFile, liveFile in
+            if savedFile == liveFile { return true }
+            guard savedFile.size == liveFile.size else { return false }
+            let savedData = try? Data(contentsOf: materials.appendingPathComponent(savedFile.path))
+            let liveData = try? Data(contentsOf: designDirectory.appendingPathComponent(liveFile.path))
+            return savedData != nil && savedData == liveData
         }
     }
 

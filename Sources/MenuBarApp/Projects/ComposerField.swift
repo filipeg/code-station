@@ -22,6 +22,7 @@ struct ComposerField<TrailingAccessory: View>: View {
     var onRecallDown: (() -> Bool)? = nil
     // Only Claude knows the thinking keyword, so only its prompts colour it.
     var highlightsKeyword: Bool = false
+    var commandNames: Set<String> = []
     // Tab, command-return and escape while a suggestion is being offered above the box.
     // It answers whether it took the key, so with nothing offered tab still moves focus
     // and escape still reaches whatever else wants it.
@@ -33,6 +34,7 @@ struct ComposerField<TrailingAccessory: View>: View {
     // Past this the box stops growing and the text scrolls inside it, so a long prompt
     // can never push the transcript off the screen.
     private let maxLines = 10
+    var minimumLines: Int = 1
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var height: CGFloat = 0
@@ -43,8 +45,10 @@ struct ComposerField<TrailingAccessory: View>: View {
          onRecallUp: (() -> Bool)? = nil,
          onRecallDown: (() -> Bool)? = nil,
          highlightsKeyword: Bool = false,
+         commandNames: Set<String> = [],
          onSuggestionKey: ((SuggestionKey) -> Bool)? = nil,
          onCommandKey: ((CommandKey) -> Bool)? = nil,
+         minimumLines: Int = 1,
          @ViewBuilder trailingAccessory: () -> TrailingAccessory) {
         _text = text
         _isFocused = isFocused
@@ -55,9 +59,11 @@ struct ComposerField<TrailingAccessory: View>: View {
         self.onRecallUp = onRecallUp
         self.onRecallDown = onRecallDown
         self.highlightsKeyword = highlightsKeyword
+        self.commandNames = commandNames
         self.onSuggestionKey = onSuggestionKey
         self.onCommandKey = onCommandKey
         self.trailingAccessory = trailingAccessory()
+        self.minimumLines = minimumLines
     }
 
     var body: some View {
@@ -73,11 +79,12 @@ struct ComposerField<TrailingAccessory: View>: View {
                  onRecallUp: onRecallUp,
                  onRecallDown: onRecallDown,
                  highlightsKeyword: highlightsKeyword,
+                 commandNames: commandNames,
                  onSuggestionKey: onSuggestionKey,
                  onCommandKey: onCommandKey,
                  animatesKeyword: !reduceMotion,
                  onHeightChange: { height = $0 })
-            .frame(height: min(max(height, line), line * CGFloat(maxLines)))
+            .frame(height: min(max(height, line * CGFloat(minimumLines)), line * CGFloat(maxLines)))
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
                     Text(placeholder)
@@ -122,6 +129,7 @@ struct TextArea: NSViewRepresentable {
     let onRecallUp: (() -> Bool)?
     let onRecallDown: (() -> Bool)?
     let highlightsKeyword: Bool
+    var commandNames: Set<String> = []
     let onSuggestionKey: ((SuggestionKey) -> Bool)?
     let onCommandKey: ((CommandKey) -> Bool)?
     let animatesKeyword: Bool
@@ -149,26 +157,40 @@ struct TextArea: NSViewRepresentable {
 
         // Still selectable while a turn runs: making it otherwise would push first
         // responder out of the box, and the cursor would not come back when the turn ends.
+        textView.setAccessibilityLabel("Prompt")
         textView.isEditable = isEnabled
         textView.textColor = isEnabled ? .labelColor : .disabledControlTextColor
 
         // Only ever claim focus, never clear it: handing it back to nobody would leave the
         // window with no first responder at all. Whatever the user moves to next takes it.
-        if isFocused, isEnabled, textView.window?.firstResponder !== textView {
-            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+        // The claim is made once each time focus is asked for, not on every update. Two
+        // fields bound to the same flag would otherwise take it from each other forever,
+        // and every switch makes macOS build a new caret indicator, which piles up fast
+        // enough to stall the whole machine.
+        if isFocused, isEnabled {
+            if !context.coordinator.claimedFocus, let window = textView.window {
+                context.coordinator.claimedFocus = true
+                if window.firstResponder !== textView {
+                    DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+                }
+            }
+        } else {
+            context.coordinator.claimedFocus = false
         }
 
         textView.highlightsKeyword = highlightsKeyword
+        textView.commandNames = commandNames
         textView.animatesKeyword = animatesKeyword
         // After the colour above, which is written into the text and takes the keyword's
         // own colours off it.
-        textView.refreshKeyword()
+        textView.refreshHighlights()
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: TextArea
         private var lastHeight: CGFloat = -1
+        var claimedFocus = false
 
         init(_ parent: TextArea) { self.parent = parent }
 
@@ -195,6 +217,10 @@ struct TextArea: NSViewRepresentable {
             textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             textView.autoresizingMask = [.width]
             textView.string = parent.text
+            textView.highlightsKeyword = parent.highlightsKeyword
+            textView.animatesKeyword = parent.animatesKeyword
+            textView.commandNames = parent.commandNames
+            textView.refreshHighlights()
 
             let scrollView = NSScrollView()
             scrollView.documentView = textView
@@ -312,14 +338,13 @@ struct TextArea: NSViewRepresentable {
     final class EditorView: NSTextView {
         weak var coordinator: Coordinator?
 
-        // The thinking keyword, coloured where it sits so it is clear the word was taken
-        // for more than text. The colours are temporary attributes, which live in the
-        // layout manager rather than in the text, so the prompt itself stays plain and
-        // typing around the word carries none of its colour.
+        // Temporary attributes belong to the layout manager, so highlighting does not
+        // change the prompt, enter the undo history, or colour the text typed after it.
         var highlightsKeyword = false
         var animatesKeyword = true
+        var commandNames: Set<String> = []
         private var keywordRanges: [NSRange] = []
-        private var colouredRanges: [NSRange] = []
+        private var commandRange: NSRange?
         private var sweep: Task<Void, Never>?
         private static let frameRate = Duration.milliseconds(42)
 
@@ -327,10 +352,9 @@ struct TextArea: NSViewRepresentable {
         // read back off the attributes.
         var isSweeping: Bool { sweep != nil }
 
-        // Called whenever the text or the settings around it change, since a keyword can
-        // appear, move or stop being one with every keystroke.
-        func refreshKeyword() {
+        func refreshHighlights() {
             keywordRanges = highlightsKeyword ? ThinkingKeyword.ranges(in: string) : []
+            commandRange = SlashQuery.highlightedRange(in: string, commandNames: commandNames)
 
             if keywordRanges.isEmpty || !animatesKeyword {
                 sweep?.cancel()
@@ -344,21 +368,21 @@ struct TextArea: NSViewRepresentable {
                         // to colour. The phase comes from the clock, so a skipped frame
                         // leaves the sweep where it should be rather than behind.
                         guard window != nil else { continue }
-                        colourKeyword()
+                        colourHighlights()
                     }
                 }
             }
-            colourKeyword()
+            colourHighlights()
         }
 
-        private func colourKeyword() {
+        private func colourHighlights() {
             guard let layoutManager else { return }
 
             let length = (string as NSString).length
-            for range in colouredRanges where NSMaxRange(range) <= length {
-                layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
-            }
-            colouredRanges = keywordRanges
+            // AppKit shifts temporary ranges as text is edited, so their previous
+            // offsets cannot tell us where all the old colour is now.
+            layoutManager.removeTemporaryAttribute(.foregroundColor,
+                                                   forCharacterRange: NSRange(location: 0, length: length))
 
             let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let now = Date()
@@ -372,11 +396,15 @@ struct TextArea: NSViewRepresentable {
                                                                                     length: 1))
                 }
             }
+            if let commandRange {
+                layoutManager.addTemporaryAttribute(.foregroundColor, value: Theme.accentNSColor,
+                                                    forCharacterRange: commandRange)
+            }
         }
 
         override func didChangeText() {
             super.didChangeText()
-            refreshKeyword()
+            refreshHighlights()
         }
 
         override func viewDidMoveToWindow() {
@@ -385,7 +413,7 @@ struct TextArea: NSViewRepresentable {
                 sweep?.cancel()
                 sweep = nil
             } else {
-                refreshKeyword()
+                refreshHighlights()
             }
         }
 

@@ -210,6 +210,7 @@ struct AttachmentChip: View {
                 .buttonStyle(.plain)
                 .hoverLift(amount: Motion.smallLift)
                 .appTooltip("Remove")
+                .accessibilityLabel("Remove \(url.lastPathComponent)")
             }
         }
         .padding(.leading, 5)

@@ -45,6 +45,21 @@ struct FileTreeTests {
         #expect(await FileTree.preview(of: file) == .empty)
     }
 
+    @Test func binaryDetectionDoesNotDiscardInvalidTrailingBytes() {
+        #expect(Data([0x61, 0xFF]).looksBinary)
+        #expect(Data([0x61, 0xE2, 0x82]).looksBinary)
+        #expect(!Data().looksBinary)
+        #expect(!Data("hello🙂".utf8).looksBinary)
+    }
+
+    @Test func binaryDetectionCompletesACharacterAcrossTheSampleBoundary() {
+        let text = String(repeating: "a", count: 7_999) + "🙂tail"
+        #expect(!Data(text.utf8).looksBinary)
+        var invalid = Data(repeating: 0x61, count: 7_999)
+        invalid.append(contentsOf: [0xFF, 0x61, 0x61, 0x61])
+        #expect(invalid.looksBinary)
+    }
+
     @Test func binaryIsRefused() async throws {
         let file = root.appendingPathComponent("blob.bin")
         try Data([0x00, 0x01, 0x02, 0xFF]).write(to: file)
@@ -226,6 +241,138 @@ struct FileTreeTests {
         #expect(result.copied.isEmpty)
         #expect(result.failures.map(\.name) == ["source"])
         #expect(!FileManager.default.fileExists(atPath: destination.appendingPathComponent("source").path))
+    }
+
+    @Test func movesItemsToTheTrash() async throws {
+        let file = root.appendingPathComponent("scratch.txt")
+        try Data("bye".utf8).write(to: file)
+
+        #expect(await FileTree.trash(file) == nil)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(await FileTree.trash(file) != nil)
+    }
+
+    @Test func renamesAnItemInItsFolder() async throws {
+        let file = root.appendingPathComponent("draft.txt")
+        try Data("hi".utf8).write(to: file)
+
+        let result = await FileTree.rename(file, to: " final.txt ")
+
+        #expect(result == .renamed(root.appendingPathComponent("final.txt")))
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(try String(contentsOf: root.appendingPathComponent("final.txt"),
+                           encoding: .utf8) == "hi")
+    }
+
+    @Test func renamesWhenOnlyTheCaseChanges() async throws {
+        let file = root.appendingPathComponent("readme.md")
+        try Data("hi".utf8).write(to: file)
+
+        let result = await FileTree.rename(file, to: "README.md")
+
+        #expect(result == .renamed(root.appendingPathComponent("README.md")))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["README.md"])
+    }
+
+    @Test func refusesNamesThatWouldLoseOrMoveSomething() async throws {
+        let file = root.appendingPathComponent("a.txt")
+        try Data("a".utf8).write(to: file)
+        try Data("b".utf8).write(to: root.appendingPathComponent("b.txt"))
+
+        #expect(await FileTree.rename(file, to: "a.txt") == .unchanged)
+        for name in ["b.txt", "", "  ", "..", "sub/a.txt"] {
+            guard case .failed = await FileTree.rename(file, to: name) else {
+                Issue.record("\(name) was accepted")
+                continue
+            }
+        }
+        #expect(try String(contentsOf: file, encoding: .utf8) == "a")
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "b")
+    }
+
+    @Test func pathsInsideARenamedFolderFollowIt() {
+        #expect(FileTree.path("/p/src", afterMoving: "/p/src", to: "/p/lib") == "/p/lib")
+        #expect(FileTree.path("/p/src/a/b.swift", afterMoving: "/p/src", to: "/p/lib")
+                == "/p/lib/a/b.swift")
+        #expect(FileTree.path("/p/srcs/b.swift", afterMoving: "/p/src", to: "/p/lib")
+                == "/p/srcs/b.swift")
+    }
+
+    @Test func createsUntitledItemsWithoutTakingANameInUse() async throws {
+        try Data("keep".utf8).write(to: root.appendingPathComponent("untitled"))
+
+        let file = await FileTree.create(folder: false, in: root)
+        let folder = await FileTree.create(folder: true, in: root)
+        let second = await FileTree.create(folder: true, in: root)
+
+        #expect(file == .created(root.appendingPathComponent("untitled 2")))
+        #expect(folder == .created(root.appendingPathComponent("untitled folder", isDirectory: true)))
+        #expect(second == .created(root.appendingPathComponent("untitled folder 2", isDirectory: true)))
+        #expect(try String(contentsOf: root.appendingPathComponent("untitled"), encoding: .utf8) == "keep")
+        #expect(await FileTree.preview(of: root.appendingPathComponent("untitled 2")) == .empty)
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("untitled folder 2").path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+    }
+
+    @Test func reportsWhenTheFolderIsGone() async {
+        let result = await FileTree.create(folder: false, in: root.appendingPathComponent("missing"))
+
+        guard case .failed = result else {
+            Issue.record("created \(result)")
+            return
+        }
+    }
+
+    @Test func movesItemsIntoAFolder() async throws {
+        let file = root.appendingPathComponent("notes.txt")
+        let folder = root.appendingPathComponent("Guide")
+        let destination = root.appendingPathComponent("docs")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try Data("n".utf8).write(to: file)
+        try Data("g".utf8).write(to: folder.appendingPathComponent("README.md"))
+
+        let result = await FileTree.move([file, folder], into: destination)
+
+        #expect(result.failures.isEmpty)
+        #expect(result.moved.map(\.to.lastPathComponent) == ["notes.txt", "Guide"])
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(try String(contentsOf: destination.appendingPathComponent("Guide/README.md"),
+                           encoding: .utf8) == "g")
+    }
+
+    @Test func aMoveNeverReplacesWhatIsThere() async throws {
+        let file = root.appendingPathComponent("notes.txt")
+        let destination = root.appendingPathComponent("docs")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try Data("new".utf8).write(to: file)
+        try Data("old".utf8).write(to: destination.appendingPathComponent("notes.txt"))
+
+        let result = await FileTree.move([file], into: destination)
+
+        #expect(result.moved.isEmpty)
+        #expect(result.failures.map(\.name) == ["notes.txt"])
+        #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+        #expect(try String(contentsOf: destination.appendingPathComponent("notes.txt"),
+                           encoding: .utf8) == "old")
+    }
+
+    @Test func droppingWhereAnItemStartedDoesNothing() async throws {
+        let folder = root.appendingPathComponent("src")
+        let nested = folder.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        let inPlace = await FileTree.move([folder], into: root)
+        let ontoItself = await FileTree.move([folder], into: folder)
+        let intoItsChild = await FileTree.move([folder], into: nested)
+
+        #expect(inPlace == FileTree.MoveResult())
+        #expect(ontoItself == FileTree.MoveResult())
+        #expect(intoItsChild.moved.isEmpty)
+        #expect(intoItsChild.failures.map(\.name) == ["src"])
+        #expect(FileManager.default.fileExists(atPath: nested.path))
     }
 
     @Test func movesUpAndDownThroughVisibleRows() {

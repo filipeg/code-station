@@ -418,6 +418,97 @@ struct TranscriptSelectionTests {
         #expect(longWidth > shortWidth * 3)
     }
 
+    @Test func aSentPromptUsesMonospaceCodeAndCommandColour() throws {
+        let page = try Page(selection: TranscriptSelection()) {
+            MessageView(message: ChatMessage(role: .user, text: "/review `some_value`"),
+                        projectPath: "/tmp", textScale: 1, availableWidth: 800)
+                .equatable()
+                .environment(\.sentPromptCommandNames, ["review"])
+        }
+        defer { page.close() }
+
+        let storage = try #require(page.views.first?.textStorage)
+        #expect(storage.string == "/review some_value")
+        let code = (storage.string as NSString).range(of: "some_value")
+        let font = try #require(storage.attribute(.font, at: code.location, effectiveRange: nil) as? NSFont)
+        #expect(font.fontDescriptor.symbolicTraits.contains(.monoSpace))
+        #expect(storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+            == NSColor(Theme.accent))
+    }
+
+    @Test func loadingCommandNamesUpdatesAnEquatableMessage() throws {
+        let message = ChatMessage(role: .user, text: "/review changes")
+        let page = try Page(selection: TranscriptSelection()) {
+            MessageView(message: message, projectPath: "/tmp", textScale: 1)
+                .equatable()
+                .environment(\.sentPromptCommandNames, [])
+        }
+        defer { page.close() }
+
+        page.redraw {
+            MessageView(message: message, projectPath: "/tmp", textScale: 1)
+                .equatable()
+                .environment(\.sentPromptCommandNames, ["review"])
+        }
+
+        let storage = try #require(page.views.first?.textStorage)
+        #expect(storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+            == NSColor(Theme.accent))
+    }
+
+    @Test func aSentCodeBlockJoinsTheSelectionAndKeepsLiteralContent() throws {
+        let selection = TranscriptSelection()
+        let code = "    /review `literal` https://example.com"
+        let page = try Page(selection: selection) {
+            MessageView(message: ChatMessage(role: .user,
+                                             text: "Before\n```text\n\(code)\n```\nAfter"),
+                        projectPath: "/tmp", textScale: 1, availableWidth: 800)
+                .environment(\.sentPromptCommandNames, ["review"])
+        }
+        defer { page.close() }
+        try #require(page.views.count == 3)
+
+        selection.selectAll()
+
+        #expect(try parts(of: selection) == ["Before", code, "After"])
+        let storage = try #require(page.views[1].textStorage)
+        #expect(storage.string == code)
+        #expect(storage.attribute(.link, at: code.count - 5, effectiveRange: nil) == nil)
+    }
+
+    @Test func aPastedPromptLinkCanBeClickedOrSelected() throws {
+        let selection = TranscriptSelection()
+        var opened: [URL] = []
+        let page = try Page(selection: selection, openURL: { opened.append($0) }) {
+            SentPromptText(text: "See https://example.com/path.")
+        }
+        defer { page.close() }
+        let view = try #require(page.views.first)
+        let start = view.characterIndex(of: "https")
+
+        page.click(view, atCharacter: start + 2)
+        #expect(opened.map(\.absoluteString) == ["https://example.com/path"])
+
+        page.drag(from: (view, start), to: (view, start + 5))
+        #expect(opened.count == 1)
+        #expect(selection.selectedText == "https")
+    }
+
+    @Test func aLongSentCodeLineScrollsWithinTheBubble() throws {
+        let page = try Page(selection: TranscriptSelection()) {
+            MessageView(message: ChatMessage(role: .user,
+                                             text: "```text\n\(String(repeating: "long line ", count: 80))\n```"),
+                        projectPath: "/tmp", textScale: 1, availableWidth: 320)
+        }
+        defer { page.close() }
+
+        let view = try #require(page.views.first)
+        let scroll = try #require(view.enclosingScrollView)
+        #expect(scroll.frame.width <= 320 - 16 - 57)
+        #expect(view.frame.width > scroll.frame.width * 3)
+        #expect(scroll.frame.height > 0)
+    }
+
     // The transcript draws its own menus. A text view handed the right-click would put
     // up AppKit's instead, which is a piece of another program in the middle of a page.
     @Test func aBlockNeverOffersTheSystemMenu() throws {
