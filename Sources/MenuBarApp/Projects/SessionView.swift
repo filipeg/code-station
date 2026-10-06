@@ -156,7 +156,7 @@ struct SessionView: View {
     // Held by the pane rather than by any one message, since the whole point of it is
     // to carry a selection from a paragraph in one message into a paragraph in another.
     @State private var transcriptSelection = TranscriptSelection()
-    @State private var transcriptFind = TranscriptFind()
+    @State private var transcriptFind: TranscriptFind
     // Caught with a monitor for the same reason as the file view's find: a SwiftUI
     // shortcut only gets the stroke after the sidebar's filter has taken it.
     @State private var findMonitor = WindowKeyMonitor(.command, "f")
@@ -196,8 +196,10 @@ struct SessionView: View {
         let path: String
     }
 
-    init(sessionID: UUID, opening: SessionDestination = .conversation) {
+    init(sessionID: UUID, opening: SessionDestination = .conversation,
+         transcriptFind: TranscriptFind = TranscriptFind()) {
         self.sessionID = sessionID
+        _transcriptFind = State(initialValue: transcriptFind)
         switch opening {
         case .conversation:
             _tab = State(initialValue: .conversation)
@@ -322,8 +324,7 @@ struct SessionView: View {
                 findMonitor.start { findShortcut() }
             }
             .onDisappear { findMonitor.stop() }
-            .onChange(of: session.messages.count) { transcriptFind.refresh(in: session.messages) }
-            .onChange(of: runner.state(sessionID).isBusy) {
+            .onChange(of: transcriptFind.isPresented ? session.messages : []) {
                 transcriptFind.refresh(in: session.messages)
             }
             .onChange(of: terminalFocused) { _, focused in

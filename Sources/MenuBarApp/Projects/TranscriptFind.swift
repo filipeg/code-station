@@ -47,8 +47,38 @@ enum TranscriptSearch {
     static func searchableTexts(of message: ChatMessage) -> [String] {
         switch message.role {
         case .assistant:
-            return [message.text] + (message.thinking ?? []).map(\.text)
-        case .user, .system, .instructions:
+            return message.blocks.flatMap { block -> [String] in
+                switch block {
+                case .prose(_, let text):
+                    return MessageSegment.split(text).flatMap { segment -> [String] in
+                        if segment.isChart { return [] }
+                        if segment.isCode { return [segment.text] }
+                        return MarkdownBlock.parse(segment.text).flatMap { block -> [String] in
+                            switch block.kind {
+                            case .paragraph(let text), .heading(_, let text), .quote(let text):
+                                return [String(AttributedString.inlineMarkdown(text).characters)]
+                            case .list(let items):
+                                return items.map { String(AttributedString.inlineMarkdown($0.text).characters) }
+                            case .table(let table):
+                                return (table.header + table.rows.flatMap { $0 }).map {
+                                    String(AttributedString.inlineMarkdown($0).characters)
+                                }
+                            case .rule, .htmlPreview:
+                                return []
+                            }
+                        }
+                    }
+                case .thinking(_, let text):
+                    return [text.trimmed]
+                case .tools:
+                    return []
+                }
+            }
+        case .user:
+            return SentPrompt.segments(message.text).map {
+                $0.isCode ? $0.text : String(AttributedString.inlineMarkdown($0.text).characters)
+            }
+        case .system, .instructions:
             return [message.text]
         }
     }
@@ -124,9 +154,13 @@ final class TranscriptFind {
     // so a reply streaming in does not pull someone away from what they were reading.
     func refresh(in messages: [ChatMessage]) {
         guard isPresented, !query.isEmpty else { return }
+        let previous = currentMatch
         result = TranscriptSearch.search(query, in: messages)
         selection = min(selection, max(0, result.matches.count - 1))
+        clearCurrent()
+        _ = placeCurrent()
         redrawAll()
+        if previous == nil { requestJump() }
     }
 
     func move(by offset: Int) {

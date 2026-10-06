@@ -32,6 +32,21 @@ struct TranscriptFindTests {
         #expect(TranscriptSearch.search("parser", in: [message]).matches.isEmpty)
     }
 
+    @Test func codeAndPlainMessagesKeepLiteralMarkdownCharacters() {
+        let code = "```text\n**parser**\n```"
+        let messages = [
+            ChatMessage(role: .user, text: code),
+            ChatMessage(role: .assistant, text: code),
+            ChatMessage(role: .system, text: "**parser**"),
+            ChatMessage(role: .instructions, text: "**parser**"),
+            ChatMessage(role: .assistant, text: "Done.",
+                        thinking: [ThinkingSegment(text: "**parser**")])
+        ]
+
+        #expect(TranscriptSearch.search("**parser**", in: messages).matches.count == 5)
+        #expect(TranscriptSearch.search("```", in: messages).matches.isEmpty)
+    }
+
     @Test func anEmptyQueryHasNoMatches() {
         #expect(TranscriptSearch.search("", in: messages) == TranscriptFindResult())
     }
@@ -131,6 +146,46 @@ struct TranscriptFindTests {
 // up with the find and paint what it found.
 @MainActor
 struct TranscriptFindPageTests {
+    @Test(arguments: [
+        "# Rename the **parser**",
+        "- Rename the **parser**",
+        "> Rename the **parser**",
+        "| Action |\n| --- |\n| Rename the **parser** |"
+    ])
+    func formattedBlockMatchesAgreeWithTheirHighlights(text: String) throws {
+        let message = ChatMessage(role: .assistant, text: text)
+        let find = TranscriptFind()
+        let page = FindPage(messages: [message], find: find)
+        defer { page.close() }
+
+        find.open(query: "Rename the parser", in: [message])
+
+        #expect(find.result.matches.count == 1)
+        let placed = try #require(find.placeCurrent())
+        #expect((placed.view.string as NSString).substring(with: placed.range) == "Rename the parser")
+    }
+
+    @Test(arguments: [MessageRole.user, .assistant])
+    func aSelectedPhraseAcrossInlineFormattingCanBeFound(role: MessageRole) throws {
+        let message = ChatMessage(role: role,
+                                  text: "Please **rename** the [parser](https://example.com/parser).")
+        let find = TranscriptFind()
+        let page = FindPage(messages: [message], find: find)
+        defer { page.close() }
+
+        find.open(query: "rename the parser", in: [message])
+
+        #expect(find.summary == "1 of 1")
+        let placed = try #require(find.placeCurrent())
+        #expect((placed.view.string as NSString).substring(with: placed.range) == "rename the parser")
+        #expect(find.highlights(in: placed.view).current == placed.range)
+
+        find.search("parser", in: [message])
+        #expect(find.result.matches.count == 1)
+        find.search("example.com", in: [message])
+        #expect(find.result.matches.isEmpty)
+    }
+
     @Test func everyDrawnMatchIsHighlightedAndTheCurrentOneIsPlaced() async throws {
         let prompt = ChatMessage(role: .user, text: "Please rename the Parser")
         let answer = ChatMessage(role: .assistant, text: "The parser is renamed. The PARSER tests pass.")
